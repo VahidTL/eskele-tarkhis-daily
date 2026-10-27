@@ -1,0 +1,39 @@
+import os, re, html, json, urllib.request, urllib.parse
+
+TG = os.environ["TG_TOKEN"]
+KEY = os.environ["ANTHROPIC_API_KEY"]
+SRC, DST = "Tarkhis_Karan", "@eskele_org"
+state = json.load(open("state.json"))
+
+def fetch(url, data=None, headers=None):
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
+    return urllib.request.urlopen(req, timeout=60).read().decode()
+
+page = fetch(f"https://t.me/s/{SRC}")
+posts = []
+for blk in page.split("tgme_widget_message_wrap")[1:]:
+    m = re.search(r'data-post="[^/]+/(\d+)"', blk)
+    t = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', blk, re.S)
+    if not m: continue
+    text = ""
+    if t:
+        text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", t.group(1)))).strip()
+    posts.append((int(m.group(1)), text))
+
+new = sorted(p for p in posts if p[0] > state["last_id"])
+PROMPT = """متن زیر یک خبر/بخشنامه‌ی گمرکی است. آن را به فارسی روان و با کلمات خودت بازنویسی کن؛ همه‌ی واقعیت‌ها، اعداد و فهرست‌ها دقیق بماند و چیزی اضافه نکن. با یک ایموجی و تیتر کوتاه شروع کن. امضای کانال، لینک منبع و نام کانال مبدأ را حذف کن. اگر متن فقط تبریک/تاریخ روز و بدون محتواست، فقط کلمه‌ی SKIP را بنویس. فقط متن نهایی را بده.
+
+"""
+for pid, text in new:
+    state["last_id"] = max(state["last_id"], pid)
+    if not text: continue
+    body = json.dumps({"model": "claude-haiku-5-5", "max_tokens": 1500,
+                       "messages": [{"role": "user", "content": PROMPT + text}]}).encode()
+    r = json.loads(fetch("https://api.anthropic.com/v1/messages", body,
+                         {"x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}))
+    out = r["content"][0]["text"].strip()
+    if out.upper().startswith("SKIP"): continue
+    fetch(f"https://api.telegram.org/bot{TG}/sendMessage",
+          urllib.parse.urlencode({"chat_id": DST, "text": out + "\n\n🚢 @eskele_org"}).encode())
+
+json.dump(state, open("state.json", "w"))
