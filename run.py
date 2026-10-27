@@ -28,7 +28,7 @@ for pid, text in new:
     state["last_id"] = max(state["last_id"], pid)
     if not text: continue
     body = json.dumps({"contents": [{"parts": [{"text": PROMPT + text}]}]}).encode()
-    r = json.loads(fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+    r = json.loads(fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
                          body, {"x-goog-api-key": KEY, "content-type": "application/json"}))
     out = r["candidates"][0]["content"]["parts"][0]["text"].strip()
     if out.upper().startswith("SKIP"): continue
