@@ -20,6 +20,14 @@ for blk in page.split("tgme_widget_message_wrap")[1:]:
         text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", t.group(1)))).strip()
     posts.append((int(m.group(1)), text))
 
+FOOTER = """
+
+━━━━━━━━━━━━━━
+🚢 اسکله | حمل بین‌المللی و ترخیص کالا
+حمل دریایی، هوایی، زمینی و ریلی و ترخیص از گمرکات؛ از استعلام تا تحویل درب‌به‌درب، با یک مسئول پرونده.
+👉 eskele.org
+📢 @eskele_org"""
+
 new = sorted(p for p in posts if p[0] > state["last_id"])
 PROMPT = """متن زیر یک خبر/بخشنامه‌ی گمرکی است. آن را به فارسی روان و با کلمات خودت بازنویسی کن؛ همه‌ی واقعیت‌ها، اعداد و فهرست‌ها دقیق بماند و چیزی اضافه نکن. با یک ایموجی و تیتر کوتاه شروع کن. امضای کانال، لینک منبع و نام کانال مبدأ را حذف کن. اگر متن فقط تبریک/تاریخ روز و بدون محتواست، فقط کلمه‌ی SKIP را بنویس. فقط متن نهایی را بده.
 
@@ -33,6 +41,6 @@ for pid, text in new:
     out = r["candidates"][0]["content"]["parts"][0]["text"].strip()
     if out.upper().startswith("SKIP"): continue
     fetch(f"https://api.telegram.org/bot{TG}/sendMessage",
-          urllib.parse.urlencode({"chat_id": DST, "text": out + "\n\n🚢 @eskele_org"}).encode())
+          urllib.parse.urlencode({"chat_id": DST, "text": out + FOOTER}).encode())
 
 json.dump(state, open("state.json", "w"))
