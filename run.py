@@ -1,7 +1,7 @@
 import os, re, html, json, urllib.request, urllib.parse
 
 TG = os.environ["TG_TOKEN"]
-KEY = os.environ["ANTHROPIC_API_KEY"]
+KEY = os.environ["GEMINI_API_KEY"]
 SRC, DST = "Tarkhis_Karan", "@eskele_org"
 state = json.load(open("state.json"))
 
@@ -27,11 +27,10 @@ PROMPT = """متن زیر یک خبر/بخشنامه‌ی گمرکی است. آ�
 for pid, text in new:
     state["last_id"] = max(state["last_id"], pid)
     if not text: continue
-    body = json.dumps({"model": "claude-haiku-5-5", "max_tokens": 1500,
-                       "messages": [{"role": "user", "content": PROMPT + text}]}).encode()
-    r = json.loads(fetch("https://api.anthropic.com/v1/messages", body,
-                         {"x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}))
-    out = r["content"][0]["text"].strip()
+    body = json.dumps({"contents": [{"parts": [{"text": PROMPT + text}]}]}).encode()
+    r = json.loads(fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+                         body, {"x-goog-api-key": KEY, "content-type": "application/json"}))
+    out = r["candidates"][0]["content"]["parts"][0]["text"].strip()
     if out.upper().startswith("SKIP"): continue
     fetch(f"https://api.telegram.org/bot{TG}/sendMessage",
           urllib.parse.urlencode({"chat_id": DST, "text": out + "\n\n🚢 @eskele_org"}).encode())
