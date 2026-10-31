@@ -1,23 +1,38 @@
 name: eskele-daily
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes (GitHub minimum)
+    - cron: "*/30 * * * *"   # backup restarter; the job below normally keeps itself alive
   workflow_dispatch:
 concurrency:
   group: eskele
   cancel-in-progress: false
 permissions:
   contents: write
+  actions: write
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - run: python3 run.py
+      - run: pip install pillow
+      - name: Check every 2 minutes for ~5h40m
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - if: always()
         run: |
           git config user.name "bot"; git config user.email "bot@users.noreply.github.com"
-          git add state.json; git diff --cached --quiet || (git commit -m "update state" && git push)
+          end=$((SECONDS+20400))
+          while [ $SECONDS -lt $end ]; do
+            python3 run.py || true
+            if ! git diff --quiet state.json; then
+              git add state.json && git commit -qm "update state"
+              git pull -q --rebase && git push -q || true
+            fi
+            sleep 120
+          done
+      - name: Start the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run daily.yml --repo "$GITHUB_REPOSITORY"

@@ -1,4 +1,4 @@
-import os, re, time, html, json, urllib.request, urllib.parse, urllib.error
+import os, io, re, time, uuid, html, json, urllib.request, urllib.parse, urllib.error
 
 DRY = os.environ.get("DRY_RUN") == "1"
 TG = os.environ.get("TG_TOKEN", "")
@@ -49,9 +49,14 @@ if "last_id" in state:
 state.setdefault("seen", {})
 state.setdefault("recent", [])
 
+UA = {"User-Agent": "Mozilla/5.0"}
+
+def fetch_bytes(url, data=None, headers=None):
+    req = urllib.request.Request(url, data=data, headers={**UA, **(headers or {})})
+    return urllib.request.urlopen(req, timeout=60).read()
+
 def fetch(url, data=None, headers=None):
-    req = urllib.request.Request(url, data=data, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
-    return urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "replace")
+    return fetch_bytes(url, data, headers).decode("utf-8", "replace")
 
 def call(url, data=None, headers=None):
     for wait in (15, 40, 0):
@@ -66,13 +71,31 @@ def clean(s):
     s = html.unescape(re.sub(r"<[^>]+>", "", s))
     return re.sub(r"\n{3,}", "\n\n", s).strip()
 
+def new_media():
+    return {"photos": [], "videos": [], "docs": []}
+
+def add_media(m, url):
+    url = html.unescape(url.strip())
+    if not url.startswith("http"): return
+    ext = url.split("?")[0].lower().rsplit(".", 1)[-1]
+    kind = ("photos" if ext in ("jpg", "jpeg", "png", "webp") else
+            "videos" if ext in ("mp4", "mov", "webm") else
+            "docs" if ext in ("pdf", "doc", "docx", "xls", "xlsx", "zip", "rar", "ppt", "pptx") else None)
+    if kind and url not in m[kind]: m[kind].append(url)
+
 def tg_items(ch):
     page = fetch(f"https://t.me/s/{ch}")
     out = []
     for blk in page.split("tgme_widget_message_wrap")[1:]:
         m = re.search(r'data-post="[^/]+/(\d+)"', blk)
         t = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', blk, re.S)
-        if m: out.append((int(m.group(1)), clean(t.group(1)) if t else ""))
+        if not m: continue
+        media = new_media()
+        for u in re.findall(r"tgme_widget_message_photo_wrap[^>]*background-image:url\('([^']+)'\)", blk):
+            if u not in media["photos"]: media["photos"].append(html.unescape(u))
+        for u in re.findall(r'<video[^>]+src="([^"]+)"', blk):
+            if u not in media["videos"]: media["videos"].append(html.unescape(u))
+        out.append((int(m.group(1)), clean(t.group(1)) if t else "", media))
     return out
 
 def rss_items(url):
@@ -81,9 +104,13 @@ def rss_items(url):
     for it in re.findall(r"<item>(.*?)</item>", x, re.S):
         g = lambda tag: (re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", it, re.S) or [None, ""])[1]
         link = clean(g("link")) or clean(g("guid"))
-        body = re.sub(r"<!\[CDATA\[|\]\]>", "", g("content:encoded") or g("description"))
-        text = clean(re.sub(r"<!\[CDATA\[|\]\]>", "", g("title"))) + "\n\n" + clean(body)
-        out.append((link, text[:3500]))
+        raw = re.sub(r"<!\[CDATA\[|\]\]>", "", g("content:encoded") or g("description"))
+        text = clean(re.sub(r"<!\[CDATA\[|\]\]>", "", g("title"))) + "\n\n" + clean(raw)
+        media = new_media()
+        for u in re.findall(r'<(?:enclosure|media:content)[^>]+url="([^"]+)"', it): add_media(media, u)
+        for u in re.findall(r'<img[^>]+src="([^"]+)"', raw)[:3]: add_media(media, u)
+        for u in re.findall(r'href="([^"]+\.(?:pdf|docx?|xlsx?|zip|rar))"', raw, re.I)[:2]: add_media(media, u)
+        out.append((link, text[:3500], media))
     return out
 
 def wco_items():
@@ -91,14 +118,20 @@ def wco_items():
     links = []
     for l in re.findall(r"newsroom/(20\d\d/[a-z]+/[^'\"\s]+?\.aspx)", page):
         if l not in links: links.append(l)
-    return [("https://www.wcoomd.org/en/media/newsroom/" + l, None) for l in links[:8]]
+    return [("https://www.wcoomd.org/en/media/newsroom/" + l, None, None) for l in links[:8]]
 
 def wco_text(url):
     p = fetch(url)
     title = clean((re.search(r"<h1[^>]*>(.*?)</h1>", p, re.S) or [None, ""])[1])
     paras = [clean(x) for x in re.findall(r"<p[^>]*>(.*?)</p>", p, re.S)]
     body = "\n".join(x for x in paras if len(x) > 50)
-    return (title + "\n\n" + body)[:3500]
+    media = new_media()
+    for u in re.findall(r'<img[^>]+src="([^"]+)"', p):
+        if "press-releases" not in u and "/images/media/" not in u: continue
+        full = urllib.parse.urljoin(url, html.unescape(u).split("?")[0])
+        if full not in media["photos"]: media["photos"].append(full)
+    for u in re.findall(r'href="([^"]+\.pdf)"', p, re.I)[:2]: add_media(media, urllib.parse.urljoin(url, u))
+    return (title + "\n\n" + body)[:3500], media
 
 _last_gemini = [0.0]
 def rewrite(text, src, english=False):
@@ -136,23 +169,105 @@ def to_html(t):
     t = re.sub(r"(?m)^\s*[\*\-]\s+", "▫️ ", t)
     return t.replace("*", "")
 
+# --- images: watermark with the eskele logo + domain
+def watermark(raw):
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.open(io.BytesIO(raw)).convert("RGBA")
+    if min(im.size) < 200: raise ValueError("image too small")
+    w, h = im.size
+    logo = Image.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "watermark.png")).convert("RGBA")
+    size = max(48, int(min(w, h) * 0.13))
+    logo = logo.resize((size, size))
+    logo.putalpha(logo.getchannel("A").point(lambda a: int(a * 0.9)))
+    font = ImageFont.load_default(size=max(14, size // 3))
+    label = "eskele.org"
+    layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    pad = max(8, size // 5)
+    tw = d.textlength(label, font=font)
+    x_logo = w - pad - size
+    y_logo = h - pad - size
+    # soft dark pill behind the label so it reads on any photo
+    d.rounded_rectangle([x_logo - tw - pad * 1.6, y_logo + size * 0.22, x_logo - pad * 0.4, y_logo + size * 0.78],
+                        radius=size // 4, fill=(11, 37, 48, 170))
+    d.text((x_logo - tw - pad, y_logo + size * 0.5), label, font=font, fill=(235, 197, 114, 255), anchor="lm")
+    im = Image.alpha_composite(im, layer)
+    im.alpha_composite(logo, (x_logo, y_logo))
+    out = io.BytesIO(); im.convert("RGB").save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+def multipart(fields, files):
+    b = "----eskele" + uuid.uuid4().hex
+    parts = []
+    for k, v in fields.items():
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    for k, (fname, data) in files.items():
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode() + data + b"\r\n")
+    parts.append(f"--{b}--\r\n".encode())
+    return b"".join(parts), {"Content-Type": f"multipart/form-data; boundary={b}"}
+
+def tg_api(method, fields, files=None):
+    url = f"https://api.telegram.org/bot{TG}/{method}"
+    if files:
+        data, hdr = multipart(fields, files)
+        return call(url, data, hdr)
+    return call(url, urllib.parse.urlencode(fields).encode())
+
+def get_photos(urls):
+    out = []
+    for u in urls[:4]:
+        try:
+            raw = fetch_bytes(u)
+            if len(raw) > 9_000_000: continue
+            out.append(watermark(raw))
+        except Exception as e:
+            print(f"photo skipped ({u[:60]}): {e}")
+    return out
+
+def send(msg, media):
+    base = {"chat_id": DST, "parse_mode": "HTML"}
+    photos = get_photos(media["photos"])
+    if DRY:
+        for i, p in enumerate(photos): open(f"out_{i}.jpg", "wb").write(p)
+        print(f"  media: {len(photos)} photo(s) watermarked, {len(media['videos'])} video(s), {len(media['docs'])} doc(s)")
+        return
+    caption_ok = len(msg) <= 1024
+    sent_text = False
+    try:
+        if len(photos) == 1 and caption_ok:
+            tg_api("sendPhoto", {**base, "caption": msg}, {"photo": ("p.jpg", photos[0])}); sent_text = True
+        elif photos:
+            if len(photos) > 1:
+                att = json.dumps([{"type": "photo", "media": f"attach://p{i}"} for i in range(len(photos))])
+                tg_api("sendMediaGroup", {"chat_id": DST, "media": att}, {f"p{i}": (f"p{i}.jpg", p) for i, p in enumerate(photos)})
+            else:
+                tg_api("sendPhoto", {"chat_id": DST}, {"photo": ("p.jpg", photos[0])})
+    except Exception as e:
+        print(f"photo send failed: {e}")
+    if not sent_text:
+        tg_api("sendMessage", {**base, "text": msg, "disable_web_page_preview": "true"})
+    for v in media["videos"][:1]:
+        try: tg_api("sendVideo", {"chat_id": DST, "video": v})
+        except Exception as e: print(f"video send failed: {e}")
+    for d in media["docs"][:2]:
+        try: tg_api("sendDocument", {"chat_id": DST, "document": d})
+        except Exception as e: print(f"document send failed: {e}")
+
 sent = 0
-def publish(text, src, english=False):
+def publish(text, src, english=False, media=None):
     """Returns True when handled (sent, skipped or duplicate)."""
     global sent
+    media = media or new_media()
     out = rewrite(text, src, english)
     head = out.split()[0].upper() if out.split() else ""
     if head in ("SKIP", "DUP") and len(out) < 8:
         print(f"[{src}] {head}: {text[:60]!r}"); return True
-    if DRY:
-        print(f"[{src}] WOULD POST:\n{out}\n"); 
-    else:
-        msg = to_html(out)
-        if len(msg) + len(FOOTER) > 4000: msg = msg[:4000 - len(FOOTER)].rsplit("\n", 1)[0]
-        call(f"https://api.telegram.org/bot{TG}/sendMessage",
-             urllib.parse.urlencode({"chat_id": DST, "text": msg + FOOTER, "parse_mode": "HTML",
-                                     "disable_web_page_preview": "true"}).encode())
-        time.sleep(8)
+    msg = to_html(out)
+    if len(msg) + len(FOOTER) > 4000: msg = msg[:4000 - len(FOOTER)].rsplit("\n", 1)[0]
+    msg += FOOTER
+    if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
+    send(msg, media)
+    if not DRY: time.sleep(8)
     state["recent"].append(out.replace("\n", " ")[:160])
     state["recent"] = state["recent"][-40:]
     sent += 1
@@ -167,10 +282,10 @@ for ch in TG_CHANNELS:
         if not posts:
             print(f"{ch}: no readable posts"); continue
         if ch not in state:
-            state[ch] = max(i for i, _ in posts); continue
-        for pid, text in sorted(p for p in posts if p[0] > state[ch]):
+            state[ch] = max(p[0] for p in posts); continue
+        for pid, text, media in sorted((p for p in posts if p[0] > state[ch]), key=lambda p: p[0]):
             if sent >= MAX_PER_RUN: break
-            if text: publish(text, "@" + ch)
+            if text: publish(text, "@" + ch, media=media)
             state[ch] = pid
             save_state()
     except Exception as e:
@@ -181,12 +296,12 @@ def run_source(name, items, text_of=None, english=False, first_run_post=0):
     global sent
     seen = state["seen"].setdefault(name, None)
     if seen is None:
-        state["seen"][name] = [k for k, _ in items][first_run_post:]; print(f"{name}: baseline {len(items)}"); return
-    for key, text in items:
+        state["seen"][name] = [i[0] for i in items][first_run_post:]; print(f"{name}: baseline {len(items)}"); return
+    for key, text, media in items:
         if sent >= MAX_PER_RUN: break
         if key in seen: continue
-        if text_of: text = text_of(key)
-        if text and (not name.startswith("mefa") or KEYWORDS.search(text)): publish(text, name, english)
+        if text_of: text, media = text_of(key)
+        if text and (not name.startswith("mefa") or KEYWORDS.search(text)): publish(text, name, english, media)
         seen.append(key)
     state["seen"][name] = seen[-300:]
 
