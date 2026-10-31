@@ -119,10 +119,16 @@ def rewrite(text, src, english=False):
             return r["candidates"][0]["content"]["parts"][0]["text"].strip()
         except urllib.error.HTTPError as e:
             last = e
-            if e.code == 429 or e.code == 404:
+            if e.code in (429, 404):
                 dead_models.add(model); print(f"model {model} unavailable ({e.code}), trying next"); continue
+            if e.code in (500, 502, 503, 504):
+                print(f"model {model} overloaded ({e.code}), trying next"); continue
             raise
     raise last or RuntimeError("no Gemini model available")
+
+def save_state():
+    if not DRY:
+        json.dump(state, open("state.json", "w"), ensure_ascii=False)
 
 def to_html(t):
     t = html.escape(t)
@@ -150,6 +156,7 @@ def publish(text, src, english=False):
     state["recent"].append(out.replace("\n", " ")[:160])
     state["recent"] = state["recent"][-40:]
     sent += 1
+    save_state()  # persist right after each post so a later crash can't cause duplicates
     return True
 
 # --- Telegram channels (numeric last-id)
@@ -165,6 +172,7 @@ for ch in TG_CHANNELS:
             if sent >= MAX_PER_RUN: break
             if text: publish(text, "@" + ch)
             state[ch] = pid
+            save_state()
     except Exception as e:
         print(f"{ch}: error {e}")
 
@@ -188,6 +196,5 @@ for name, url in RSS.items():
 try: run_source("wco", wco_items(), wco_text, english=True, first_run_post=2)
 except Exception as e: print(f"wco: error {e}")
 
-if not DRY:
-    json.dump(state, open("state.json", "w"), ensure_ascii=False)
+save_state()
 print("done, posted:", sent)
