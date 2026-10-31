@@ -1,0 +1,12 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for u in https://www.irica.ir/ https://www.irica.ir/fa/news https://www.mefa.ir/rss-homepage https://akhbargomroki.com/feed https://www.wcoomd.org/en/media/newsroom.aspx https://www.wcoomd.org/en/rss.aspx; do
+            echo "== $u"; curl -sL -m 30 -A "Mozilla/5.0" -o /tmp/o.html -w "%{http_code} %{content_type} %{size_download}\n" "$u"; head -c 200 /tmp/o.html | tr '\n' ' '; echo
+          done
+          echo "== irica links"; curl -sL -m 30 -A "Mozilla/5.0" https://www.irica.ir/ | grep -oiE 'href="[^"]*(rss|feed|news|akhbar)[^"]*"' | sort -u | head -15
+          echo "== wco links"; curl -sL -m 30 -A "Mozilla/5.0" https://www.wcoomd.org/en/media/newsroom.aspx | grep -oiE 'href="[^"]*(rss|feed|newsroom/[^"]*)"' | sort -u | head -15
