@@ -1,4 +1,4 @@
-import os, re, html, json, urllib.request, urllib.parse
+import os, re, time, html, json, urllib.request, urllib.parse
 
 TG = os.environ["TG_TOKEN"]
 KEY = os.environ["GEMINI_API_KEY"]
@@ -24,6 +24,14 @@ def fetch(url, data=None, headers=None):
     req = urllib.request.Request(url, data=data, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
     return urllib.request.urlopen(req, timeout=60).read().decode()
 
+def call(url, data=None, headers=None):
+    for wait in (15, 40, 0):
+        try:
+            return fetch(url, data, headers)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or not wait: raise
+            time.sleep(wait)
+
 def get_posts(ch):
     page = fetch(f"https://t.me/s/{ch}")
     posts = []
@@ -44,16 +52,17 @@ for ch in CHANNELS:
             print(f"{ch}: no readable posts (web preview disabled?)"); continue
         if ch not in state:  # first sight: baseline only, don't flood
             state[ch] = max(i for i, _ in posts); continue
-        for pid, text in sorted(p for p in posts if p[0] > state[ch]):
-            state[ch] = max(state[ch], pid)
-            if not text: continue
-            body = json.dumps({"contents": [{"parts": [{"text": PROMPT + text}]}]}).encode()
-            r = json.loads(fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-                                 body, {"x-goog-api-key": KEY, "content-type": "application/json"}))
-            out = r["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if out.upper().startswith("SKIP"): continue
-            fetch(f"https://api.telegram.org/bot{TG}/sendMessage",
-                  urllib.parse.urlencode({"chat_id": DST, "text": out + FOOTER}).encode())
+        for pid, text in sorted(p for p in posts if p[0] > state[ch])[:5]:  # max 5 per run
+            if text:
+                body = json.dumps({"contents": [{"parts": [{"text": PROMPT + text}]}]}).encode()
+                r = json.loads(call("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                                    body, {"x-goog-api-key": KEY, "content-type": "application/json"}))
+                out = r["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if not out.upper().startswith("SKIP"):
+                    call(f"https://api.telegram.org/bot{TG}/sendMessage",
+                         urllib.parse.urlencode({"chat_id": DST, "text": out + FOOTER}).encode())
+                    time.sleep(8)  # stay under Gemini/Telegram rate limits
+            state[ch] = pid  # advance only after success
     except Exception as e:
         print(f"{ch}: error {e}")
 
