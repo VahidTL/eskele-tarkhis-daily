@@ -310,6 +310,13 @@ def publish(text, src, english=False, media=None, link=""):
     save_state()  # persist right after each post so a later crash can't cause duplicates
     return True
 
+if os.environ.get("BACKFILL"):  # one-off: blog drafts for the channel's last 5 posts
+    for pid, text, _ in tg_items("eskele_org")[-5:]:
+        text = text.split("━━━")[0].strip()
+        print("backfill", pid, len(text))
+        if text: blog_draft(text, "@eskele_org", "")
+    raise SystemExit
+
 # --- Telegram channels (numeric last-id)
 for ch in TG_CHANNELS:
     if sent >= MAX_PER_RUN: break

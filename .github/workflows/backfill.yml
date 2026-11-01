@@ -1,0 +1,17 @@
+name: backfill
+on: workflow_dispatch
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pillow
+      - run: python3 run.py
+        env:
+          BACKFILL: "1"
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BLOG_INGEST_TOKEN: ${{ secrets.BLOG_INGEST_TOKEN }}
+          BLOG_URL: https://eskele.org/ingest/posts
+          OWNER_CHAT_ID: "43391749"
