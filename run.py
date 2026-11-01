@@ -202,7 +202,8 @@ def blog_draft(text, src, link):
                             {"Content-Type": "application/json", "X-Ingest-Token": BLOG_TOKEN}))
         if OWNER_CHAT:
             tg_api("sendMessage", {"chat_id": OWNER_CHAT, "disable_web_page_preview": "true",
-                   "text": f"📝 پیش‌نویس بلاگ آماده‌ی بررسی است:\n{art['title']}\n\nویرایش و انتشار:\n{r['edit_url']}"})
+                   "text": f"📝 پیش‌نویس بلاگ آماده‌ی بررسی است:\n{art['title']}\n\nویرایش:\n{r['edit_url']}",
+                   **({"reply_markup": json.dumps({"inline_keyboard": [[{"text": "✅ تأیید و انتشار", "url": r["approve_url"]}]]})} if r.get("approve_url") else {})})
     except Exception as e:
         print(f"blog draft failed: {e}")
 
