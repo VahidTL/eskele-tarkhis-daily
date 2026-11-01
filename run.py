@@ -49,7 +49,7 @@ if "last_id" in state:
 state.setdefault("seen", {})
 state.setdefault("recent", [])
 
-UA = {"User-Agent": "Mozilla/5.0"}
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8"}
 
 def fetch_bytes(url, data=None, headers=None):
     req = urllib.request.Request(url, data=data, headers={**UA, **(headers or {})})
@@ -134,11 +134,13 @@ def wco_text(url):
     return (title + "\n\n" + body)[:3500], media
 
 _last_gemini = [0.0]
-def ask(prompt):
+def ask(prompt, as_json=False):
     wait = 13 - (time.time() - _last_gemini[0])  # free tier: keep under ~5 requests/minute
     if wait > 0: time.sleep(wait)
     _last_gemini[0] = time.time()
-    body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode()
+    req = {"contents": [{"parts": [{"text": prompt}]}]}
+    if as_json: req["generationConfig"] = {"responseMimeType": "application/json"}
+    body = json.dumps(req).encode()
     last = None
     for model in MODELS:
         if model in dead_models: continue
@@ -189,7 +191,7 @@ BLOG_PROMPT = """تو نویسنده‌ی بلاگ «اسکله» (حمل بین
 def blog_draft(text, src, link):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
-        raw = ask(BLOG_PROMPT.format(src=src, text=text[:3000]))
+        raw = ask(BLOG_PROMPT.format(src=src, text=text[:3000]), as_json=True)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
         art = json.loads(raw)
         art["paragraphs"] = [p for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
@@ -311,7 +313,7 @@ def publish(text, src, english=False, media=None, link=""):
     return True
 
 if os.environ.get("BACKFILL"):  # one-off: blog drafts for the channel's last 5 posts
-    for pid, text, _ in tg_items("eskele_org")[-5:]:
+    for pid, text, _ in [p for p in tg_items("eskele_org") if p[0] == 66]:
         text = text.split("━━━")[0].strip()
         print("backfill", pid, len(text))
         if text: blog_draft(text, "@eskele_org", "")
