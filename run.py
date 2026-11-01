@@ -1,4 +1,4 @@
-import os, io, re, time, uuid, html, json, urllib.request, urllib.parse, urllib.error
+import os, io, re, base64, time, uuid, html, json, urllib.request, urllib.parse, urllib.error
 
 DRY = os.environ.get("DRY_RUN") == "1"
 TG = os.environ.get("TG_TOKEN", "")
@@ -188,7 +188,7 @@ BLOG_PROMPT = """تو نویسنده‌ی بلاگ «اسکله» (حمل بین
 فقط یک شیء JSON معتبر برگردان با این کلیدها (بدون ``` یا متن اضافه):
 {{"title": "تیتر فارسی کوتاه و جذاب (۶۰ تا ۹۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "seo_description": "توضیح متا تا ۱۵۰ حرف", "paragraphs": ["پاراگراف", "## تیتر میانی", "پاراگراف", "..."]}}"""
 
-def blog_draft(text, src, link):
+def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
         raw = ask(BLOG_PROMPT.format(src=src, text=text[:3000]), as_json=True)
@@ -196,6 +196,7 @@ def blog_draft(text, src, link):
         art = json.loads(raw)
         art["paragraphs"] = [p for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
         art["source_url"] = link if link.startswith("https://") else None
+        if cover_jpg: art["cover"] = base64.b64encode(cover_jpg).decode()
         if DRY:
             print("  blog draft:", art["title"]); return
         r = json.loads(call(BLOG_URL, json.dumps(art, ensure_ascii=False).encode(),
@@ -206,6 +207,35 @@ def blog_draft(text, src, link):
                    **({"reply_markup": json.dumps({"inline_keyboard": [[{"text": "✅ تأیید و انتشار", "url": r["approve_url"]}]]})} if r.get("approve_url") else {})})
     except Exception as e:
         print(f"blog draft failed: {e}")
+
+# --- cover: 1200x630 brand card with the headline, used for the channel post and the blog
+def cover(out):
+    from PIL import Image, ImageDraw, ImageFont
+    line = next((l for l in out.splitlines() if l.strip()), "")
+    title = re.sub("[^\\w\\s\u200c،؛:؟!%\\-.()«»]", "", line).strip()[:110]
+    W, H = 1200, 630
+    top, bottom = (11, 37, 48), (20, 75, 95)
+    im = Image.new("RGB", (W, H))
+    d = ImageDraw.Draw(im)
+    for y in range(H):
+        d.line([(0, y), (W, y)], fill=tuple(a + (b - a) * y // H for a, b in zip(top, bottom)))
+    here = os.path.dirname(os.path.abspath(__file__))
+    font = ImageFont.truetype(os.path.join(here, "Vazir-Bold.ttf"), 58)
+    small = ImageFont.truetype(os.path.join(here, "Vazir-Bold.ttf"), 30)
+    lines, cur = [], ""
+    for w in title.split():
+        t = (cur + " " + w).strip()
+        if d.textlength(t, font=font) > W - 160 and cur: lines.append(cur); cur = w
+        else: cur = t
+    lines = (lines + [cur])[:4]
+    y = (H - 110 - len(lines) * 84) // 2
+    for l in lines:
+        d.text((W - 80, y), l, font=font, fill=(255, 255, 255), anchor="ra"); y += 84
+    logo = Image.open(os.path.join(here, "watermark.png")).convert("RGBA").resize((84, 84))
+    im.paste(logo, (W - 164, H - 124), logo)
+    d.text((W - 184, H - 82), "eskele.org", font=small, fill=(235, 197, 114), anchor="rm")
+    b = io.BytesIO(); im.save(b, "JPEG", quality=90)
+    return b.getvalue()
 
 # --- images: watermark with the eskele logo + domain
 def watermark(raw):
@@ -264,7 +294,7 @@ def get_photos(urls):
 
 def send(msg, media):
     base = {"chat_id": DST, "parse_mode": "HTML"}
-    photos = get_photos(media["photos"])
+    photos = ([media["cover"]] if media.get("cover") else []) + get_photos(media["photos"][:3])
     if DRY:
         for i, p in enumerate(photos): open(f"out_{i}.jpg", "wb").write(p)
         print(f"  media: {len(photos)} photo(s) watermarked, {len(media['videos'])} video(s), {len(media['docs'])} doc(s)")
@@ -300,13 +330,15 @@ def publish(text, src, english=False, media=None, link=""):
     head = out.split()[0].upper() if out.split() else ""
     if head in ("SKIP", "DUP") and len(out) < 8:
         print(f"[{src}] {head}: {text[:60]!r}"); return True
+    try: media["cover"] = cover(out)
+    except Exception as e: print(f"cover failed: {e}")
     msg = to_html(out)
     if len(msg) + len(FOOTER) > 4000: msg = msg[:4000 - len(FOOTER)].rsplit("\n", 1)[0]
     msg += FOOTER
     if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
     send(msg, media)
     if not DRY: time.sleep(8)
-    if not DRY and link: blog_draft(text, src, link)
+    if not DRY and link: blog_draft(text, src, link, media.get("cover"))
     state["recent"].append(out.replace("\n", " ")[:160])
     state["recent"] = state["recent"][-40:]
     sent += 1

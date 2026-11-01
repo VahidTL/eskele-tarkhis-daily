@@ -15,6 +15,7 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get install -y -q libfribidi0 libraqm0 || true
       - run: pip install pillow
       - name: Check every 2 minutes for ~5h40m
         env:
