@@ -20,6 +20,9 @@ jobs:
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BLOG_INGEST_TOKEN: ${{ secrets.BLOG_INGEST_TOKEN }}
+          BLOG_URL: https://eskele.org/ingest/posts
+          OWNER_CHAT_ID: "43391749"
         run: |
           git config user.name "bot"; git config user.email "bot@users.noreply.github.com"
           end=$((SECONDS+20400))

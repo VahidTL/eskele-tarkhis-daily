@@ -134,14 +134,10 @@ def wco_text(url):
     return (title + "\n\n" + body)[:3500], media
 
 _last_gemini = [0.0]
-def rewrite(text, src, english=False):
+def ask(prompt):
     wait = 13 - (time.time() - _last_gemini[0])  # free tier: keep under ~5 requests/minute
     if wait > 0: time.sleep(wait)
     _last_gemini[0] = time.time()
-    recent = "\n".join(f"- {r}" for r in state["recent"][-30:]) or "(هنوز موردی نیست)"
-    prompt = PROMPT.format(recent=recent, src=src, text=text,
-                           lang="، متن انگلیسی" if english else "",
-                           translate="متن انگلیسی است؛ آن را به فارسی روان و طبیعی ترجمه و بازنویسی کن (نه ترجمه‌ی تحت‌اللفظی؛ اصطلاحات گمرکی را با معادل رایج فارسی بنویس)." if english else "")
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode()
     last = None
     for model in MODELS:
@@ -159,6 +155,13 @@ def rewrite(text, src, english=False):
             raise
     raise last or RuntimeError("no Gemini model available")
 
+def rewrite(text, src, english=False):
+    recent = "\n".join(f"- {r}" for r in state["recent"][-30:]) or "(هنوز موردی نیست)"
+    prompt = PROMPT.format(recent=recent, src=src, text=text,
+                           lang="، متن انگلیسی" if english else "",
+                           translate="متن انگلیسی است؛ آن را به فارسی روان و طبیعی ترجمه و بازنویسی کن (نه ترجمه‌ی تحت‌اللفظی؛ اصطلاحات گمرکی را با معادل رایج فارسی بنویس)." if english else "")
+    return ask(prompt)
+
 def save_state():
     if not DRY:
         json.dump(state, open("state.json", "w"), ensure_ascii=False)
@@ -168,6 +171,38 @@ def to_html(t):
     t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t, flags=re.S)
     t = re.sub(r"(?m)^\s*[\*\-]\s+", "▫️ ", t)
     return t.replace("*", "")
+
+BLOG_URL = os.environ.get("BLOG_URL", "")
+BLOG_TOKEN = os.environ.get("BLOG_INGEST_TOKEN", "")
+OWNER_CHAT = os.environ.get("OWNER_CHAT_ID", "")
+
+BLOG_PROMPT = """تو نویسنده‌ی بلاگ «اسکله» (حمل بین‌المللی و ترخیص کالا) هستی.
+از خبر زیر یک مقاله‌ی فارسی کامل‌تر از پست کانال بنویس: ۳ تا ۵ بخش با تیتر میانی، هر بخش ۲ تا ۴ جمله، و در آخر جمع‌بندی کوتاه برای فعالان بازرگانی.
+فقط به واقعیت‌های خبر تکیه کن، چیزی اضافه نکن، و عددها، نام‌ها و مهلت‌ها را دقیق نگه دار.
+
+خبر (منبع: {src}):
+{text}
+
+فقط یک شیء JSON معتبر برگردان با این کلیدها (بدون ``` یا متن اضافه):
+{{"title": "تیتر فارسی کوتاه و جذاب (۶۰ تا ۹۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "seo_description": "توضیح متا تا ۱۵۰ حرف", "paragraphs": ["پاراگراف", "## تیتر میانی", "پاراگراف", "..."]}}"""
+
+def blog_draft(text, src, link):
+    if not (BLOG_URL and BLOG_TOKEN): return
+    try:
+        raw = ask(BLOG_PROMPT.format(src=src, text=text[:3000]))
+        raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
+        art = json.loads(raw)
+        art["paragraphs"] = [p for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
+        art["source_url"] = link if link.startswith("https://") else None
+        if DRY:
+            print("  blog draft:", art["title"]); return
+        r = json.loads(call(BLOG_URL, json.dumps(art, ensure_ascii=False).encode(),
+                            {"Content-Type": "application/json", "X-Ingest-Token": BLOG_TOKEN}))
+        if OWNER_CHAT:
+            tg_api("sendMessage", {"chat_id": OWNER_CHAT, "disable_web_page_preview": "true",
+                   "text": f"📝 پیش‌نویس بلاگ آماده‌ی بررسی است:\n{art['title']}\n\nویرایش و انتشار:\n{r['edit_url']}"})
+    except Exception as e:
+        print(f"blog draft failed: {e}")
 
 # --- images: watermark with the eskele logo + domain
 def watermark(raw):
@@ -254,7 +289,7 @@ def send(msg, media):
         except Exception as e: print(f"document send failed: {e}")
 
 sent = 0
-def publish(text, src, english=False, media=None):
+def publish(text, src, english=False, media=None, link=""):
     """Returns True when handled (sent, skipped or duplicate)."""
     global sent
     media = media or new_media()
@@ -268,6 +303,7 @@ def publish(text, src, english=False, media=None):
     if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
     send(msg, media)
     if not DRY: time.sleep(8)
+    if not DRY and link: blog_draft(text, src, link)
     state["recent"].append(out.replace("\n", " ")[:160])
     state["recent"] = state["recent"][-40:]
     sent += 1
@@ -285,7 +321,7 @@ for ch in TG_CHANNELS:
             state[ch] = max(p[0] for p in posts); continue
         for pid, text, media in sorted((p for p in posts if p[0] > state[ch]), key=lambda p: p[0]):
             if sent >= MAX_PER_RUN: break
-            if text: publish(text, "@" + ch, media=media)
+            if text: publish(text, "@" + ch, media=media, link=f"https://t.me/{ch}/{pid}")
             state[ch] = pid
             save_state()
     except Exception as e:
@@ -301,7 +337,7 @@ def run_source(name, items, text_of=None, english=False, first_run_post=0):
         if sent >= MAX_PER_RUN: break
         if key in seen: continue
         if text_of: text, media = text_of(key)
-        if text and (not name.startswith("mefa") or KEYWORDS.search(text)): publish(text, name, english, media)
+        if text and (not name.startswith("mefa") or KEYWORDS.search(text)): publish(text, name, english, media, link=key)
         seen.append(key)
     state["seen"][name] = seen[-300:]
 
