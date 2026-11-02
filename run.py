@@ -247,6 +247,9 @@ def blog_draft(text, src, link, cover_jpg=None):
                    **({"reply_markup": json.dumps({"inline_keyboard": [[{"text": "✅ تأیید و انتشار", "url": r["approve_url"]}]]})} if r.get("approve_url") else {})})
     except Exception as e:
         print(f"blog draft failed: {e}")
+        if OWNER_CHAT and not DRY:
+            try: tg_api("sendMessage", {"chat_id": OWNER_CHAT, "text": f"⚠️ ساخت پیش‌نویس بلاگ ناموفق بود:\n{link}\n\n{str(e)[:500]}"})
+            except Exception: pass
 
 # --- cover: 1200x630 for the channel post and the blog. A Gemini image when one is available, else a brand card.
 IMAGE_PROMPT = """Create a high-quality, photorealistic editorial cover photo (16:9) for a news story about international shipping, customs clearance, ports, containers and trade.
