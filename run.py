@@ -2,7 +2,9 @@ import os, io, re, base64, time, uuid, html, json, urllib.request, urllib.parse,
 
 DRY = os.environ.get("DRY_RUN") == "1"
 TG = os.environ.get("TG_TOKEN", "")
+# Google key first; the AvalAI key (same native Gemini API on its own host) is the backup
 KEYS = [k for k in (os.environ.get("GEMINI_API_KEY"), os.environ.get("GEMINI_API_KEY_2")) if k]
+BASES = ["https://generativelanguage.googleapis.com/v1beta/models/" if k == os.environ.get("GEMINI_API_KEY") else "https://api.avalai.ir/v1beta/models/" for k in KEYS]
 DST = "@eskele_org"
 MAX_PER_RUN = 6
 # free-tier quotas are per model, so fall through to the next one when a model's daily quota is gone
@@ -147,7 +149,7 @@ def ask(prompt, as_json=False, search=False):
         for i, key in enumerate(KEYS):
             if (model, i) in dead_models: continue
             try:
-                r = json.loads(fetch(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                r = json.loads(fetch(f"{BASES[i]}{model}:generateContent",
                                      body, {"x-goog-api-key": key, "content-type": "application/json"}))
                 return "".join(p.get("text", "") for p in r["candidates"][0]["content"]["parts"]).strip()
             except urllib.error.HTTPError as e:
@@ -170,7 +172,7 @@ def gen_image(prompt):
         for i, key in enumerate(KEYS):
             if (model, i) in dead_models: continue
             try:
-                r = json.loads(fetch(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                r = json.loads(fetch(f"{BASES[i]}{model}:generateContent",
                                      body, {"x-goog-api-key": key, "content-type": "application/json"}))
                 for p in r["candidates"][0]["content"]["parts"]:
                     if "inlineData" in p:
