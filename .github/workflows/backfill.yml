@@ -12,6 +12,7 @@ jobs:
           BACKFILL: "1"
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           BLOG_INGEST_TOKEN: ${{ secrets.BLOG_INGEST_TOKEN }}
           BLOG_URL: https://eskele.org/ingest/posts
           OWNER_CHAT_ID: "43391749"

@@ -2,7 +2,7 @@ import os, io, re, base64, time, uuid, html, json, urllib.request, urllib.parse,
 
 DRY = os.environ.get("DRY_RUN") == "1"
 TG = os.environ.get("TG_TOKEN", "")
-KEY = os.environ["GEMINI_API_KEY"]
+KEYS = [k for k in (os.environ.get("GEMINI_API_KEY"), os.environ.get("GEMINI_API_KEY_2")) if k]
 DST = "@eskele_org"
 MAX_PER_RUN = 6
 # free-tier quotas are per model, so fall through to the next one when a model's daily quota is gone
@@ -134,28 +134,55 @@ def wco_text(url):
     return (title + "\n\n" + body)[:3500], media
 
 _last_gemini = [0.0]
-def ask(prompt, as_json=False):
+def ask(prompt, as_json=False, search=False):
     wait = 13 - (time.time() - _last_gemini[0])  # free tier: keep under ~5 requests/minute
     if wait > 0: time.sleep(wait)
     _last_gemini[0] = time.time()
     req = {"contents": [{"parts": [{"text": prompt}]}]}
     if as_json: req["generationConfig"] = {"responseMimeType": "application/json"}
+    if search: req["tools"] = [{"google_search": {}}]
     body = json.dumps(req).encode()
     last = None
     for model in MODELS:
-        if model in dead_models: continue
-        try:
-            r = json.loads(fetch(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                                 body, {"x-goog-api-key": KEY, "content-type": "application/json"}))
-            return r["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except urllib.error.HTTPError as e:
-            last = e
-            if e.code in (429, 404):
-                dead_models.add(model); print(f"model {model} unavailable ({e.code}), trying next"); continue
-            if e.code in (500, 502, 503, 504):
-                print(f"model {model} overloaded ({e.code}), trying next"); continue
-            raise
+        for i, key in enumerate(KEYS):
+            if (model, i) in dead_models: continue
+            try:
+                r = json.loads(fetch(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                     body, {"x-goog-api-key": key, "content-type": "application/json"}))
+                return "".join(p.get("text", "") for p in r["candidates"][0]["content"]["parts"]).strip()
+            except urllib.error.HTTPError as e:
+                last = e
+                if e.code in (429, 404, 403):
+                    dead_models.add((model, i)); print(f"model {model} key{i + 1} unavailable ({e.code})"); continue
+                if e.code in (500, 502, 503, 504):
+                    print(f"model {model} overloaded ({e.code}), trying next"); continue
+                if search and e.code == 400: raise
+                raise
     raise last or RuntimeError("no Gemini model available")
+
+# strongest image model first; each is tried on every key before falling back to a weaker one
+IMAGE_MODELS = ["gemini-3-pro-image", "gemini-3-pro-image-preview", "gemini-3.1-flash-image",
+                "gemini-3.1-flash-image-preview", "gemini-2.5-flash-image", "gemini-3.1-flash-lite-image"]
+def gen_image(prompt):
+    body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                       "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "16:9"}}}).encode()
+    for model in IMAGE_MODELS:
+        for i, key in enumerate(KEYS):
+            if (model, i) in dead_models: continue
+            try:
+                r = json.loads(fetch(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                     body, {"x-goog-api-key": key, "content-type": "application/json"}))
+                for p in r["candidates"][0]["content"]["parts"]:
+                    if "inlineData" in p:
+                        print(f"image by {model} key{i + 1}")
+                        return base64.b64decode(p["inlineData"]["data"])
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 404, 403, 400): dead_models.add((model, i))
+                print(f"image model {model} key{i + 1} failed ({e.code})")
+            except Exception as e:
+                print(f"image model {model} key{i + 1} failed ({e})")
+    return None
+
 
 def rewrite(text, src, english=False):
     recent = "\n".join(f"- {r}" for r in state["recent"][-30:]) or "(هنوز موردی نیست)"
@@ -178,23 +205,34 @@ BLOG_URL = os.environ.get("BLOG_URL", "")
 BLOG_TOKEN = os.environ.get("BLOG_INGEST_TOKEN", "")
 OWNER_CHAT = os.environ.get("OWNER_CHAT_ID", "")
 
-BLOG_PROMPT = """تو نویسنده‌ی بلاگ «اسکله» (حمل بین‌المللی و ترخیص کالا) هستی.
-از خبر زیر یک مقاله‌ی فارسی کامل‌تر از پست کانال بنویس: ۳ تا ۵ بخش با تیتر میانی، هر بخش ۲ تا ۴ جمله، و در آخر جمع‌بندی کوتاه برای فعالان بازرگانی.
-فقط به واقعیت‌های خبر تکیه کن، چیزی اضافه نکن، و عددها، نام‌ها و مهلت‌ها را دقیق نگه دار.
+BRIEF_SKILL = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "brief_skill.md"), encoding="utf-8").read()
 
-خبر (منبع: {src}):
+ARTICLE_PROMPT = """تو نویسنده‌ی ارشد بلاگ «اسکله» (حمل بین‌المللی و ترخیص کالا) هستی.
+بریف سئوی زیر را مو‌به‌مو اجرا کن و مقاله‌ی کامل فارسی بنویس: ساختار H2 و H3، نکته‌ها، پرسش‌های متداول و طول هدف بریف را رعایت کن و جای همه‌ی یادداشت‌های داخل [ ] را با متن واقعی پر کن.
+واقعیت‌ها، عددها، نام‌ها و تاریخ‌ها فقط از خبر اصلی بیایند؛ عدد یا آمار یا نقل‌قول جدید نساز. می‌توانی زمینه، توضیح مفاهیم و راهنمای عملی عمومی برای خواننده اضافه کنی.
+
+خبر اصلی (منبع: {src}):
 {text}
 
-فقط یک شیء JSON معتبر برگردان با این کلیدها (بدون ``` یا متن اضافه):
-{{"title": "تیتر فارسی کوتاه و جذاب (۶۰ تا ۹۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "seo_description": "توضیح متا تا ۱۵۰ حرف", "paragraphs": ["پاراگراف", "## تیتر میانی", "پاراگراف", "..."]}}"""
+بریف:
+{brief}
+
+فقط یک شیء JSON معتبر برگردان:
+{{"title": "H1 / عنوان سئو (حداکثر ۷۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "seo_description": "توضیح متا تا ۱۵۵ حرف", "paragraphs": ["پاراگراف", "## تیتر H2", "پاراگراف", "### تیتر H3 را هم با ## بنویس", "..."]}}
+هر عنصر paragraphs یا یک پاراگراف است یا تیتری که با «## » شروع می‌شود. حداکثر ۵۵ عنصر."""
 
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
-        raw = ask(BLOG_PROMPT.format(src=src, text=text[:3000]), as_json=True)
+        brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000]
+        try: brief = ask(brief_req, search=True)
+        except Exception as e:
+            print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req)
+        raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:12000]), as_json=True)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
         art = json.loads(raw)
-        art["paragraphs"] = [p for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
+        art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
+        art["title"] = art["title"][:180]
         art["source_url"] = link if link.startswith("https://") else None
         if cover_jpg: art["cover"] = base64.b64encode(cover_jpg).decode()
         if DRY:
@@ -208,33 +246,49 @@ def blog_draft(text, src, link, cover_jpg=None):
     except Exception as e:
         print(f"blog draft failed: {e}")
 
-# --- cover: 1200x630 brand card with the headline, used for the channel post and the blog
+# --- cover: 1200x630 for the channel post and the blog. A Gemini image when one is available, else a brand card.
+IMAGE_PROMPT = """Create a high-quality, photorealistic editorial cover photo (16:9) for a news story about international shipping, customs clearance, ports, containers and trade.
+Headline (Persian): «{title}»
+Show the real-world subject of the story in a clean, modern, professional style with natural light and depth.
+Absolutely no text, letters, numbers, logos, flags or watermarks anywhere in the image."""
+
 def cover(out):
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
     line = next((l for l in out.splitlines() if l.strip()), "")
     title = re.sub("[^\\w\\s\u200c،؛:؟!%\\-.()«»]", "", line).strip()[:110]
     W, H = 1200, 630
-    top, bottom = (11, 37, 48), (20, 75, 95)
-    im = Image.new("RGB", (W, H))
-    d = ImageDraw.Draw(im)
-    for y in range(H):
-        d.line([(0, y), (W, y)], fill=tuple(a + (b - a) * y // H for a, b in zip(top, bottom)))
+    bg, bg2, fg, accent, sub = (12, 36, 48), (18, 52, 68), (232, 240, 244), (219, 167, 60), (91, 191, 229)
     here = os.path.dirname(os.path.abspath(__file__))
-    font = ImageFont.truetype(os.path.join(here, "Vazir-Bold.ttf"), 58)
-    small = ImageFont.truetype(os.path.join(here, "Vazir-Bold.ttf"), 30)
+    fpath = os.path.join(here, "Vazir-Bold.ttf")
+    photo = gen_image(IMAGE_PROMPT.format(title=title))
+    if photo:
+        im = ImageOps.fit(Image.open(io.BytesIO(photo)).convert("RGB"), (W, H), Image.LANCZOS)
+        band_h = 230
+        band = Image.new("RGBA", (W, band_h), bg + (236,))
+        im.paste(band, (0, H - band_h), band)
+        d = ImageDraw.Draw(im)
+        d.rectangle([0, H - band_h, W, H - band_h + 6], fill=accent)
+        size, max_lines, top = 44, 2, H - band_h + 34
+    else:
+        im = Image.new("RGB", (W, H)); d = ImageDraw.Draw(im)
+        for y in range(H):
+            d.line([(0, y), (W, y)], fill=tuple(a + (b - a) * y // H for a, b in zip(bg, bg2)))
+        d.rectangle([W - 18, 0, W, H], fill=accent)
+        size, max_lines, top = 58, 4, None
+    font = ImageFont.truetype(fpath, size); small = ImageFont.truetype(fpath, 28)
     lines, cur = [], ""
     for w in title.split():
         t = (cur + " " + w).strip()
-        if d.textlength(t, font=font) > W - 160 and cur: lines.append(cur); cur = w
+        if d.textlength(t, font=font) > W - 200 and cur: lines.append(cur); cur = w
         else: cur = t
-    lines = (lines + [cur])[:4]
-    y = (H - 110 - len(lines) * 84) // 2
+    lines = (lines + [cur])[:max_lines]
+    y = top if top is not None else (H - 120 - len(lines) * int(size * 1.45)) // 2
     for l in lines:
-        d.text((W - 80, y), l, font=font, fill=(255, 255, 255), anchor="ra"); y += 84
-    logo = Image.open(os.path.join(here, "watermark.png")).convert("RGBA").resize((84, 84))
-    im.paste(logo, (W - 164, H - 124), logo)
-    d.text((W - 184, H - 82), "eskele.org", font=small, fill=(235, 197, 114), anchor="rm")
-    b = io.BytesIO(); im.save(b, "JPEG", quality=90)
+        d.text((W - 70, y), l, font=font, fill=fg, anchor="ra"); y += int(size * 1.45)
+    logo = Image.open(os.path.join(here, "watermark.png")).convert("RGBA").resize((76, 76), Image.LANCZOS)
+    im.paste(logo, (70, H - 110), logo)
+    d.text((162, H - 72), "eskele.org", font=small, fill=accent if photo else sub, anchor="lm")
+    b = io.BytesIO(); im.save(b, "JPEG", quality=92)
     return b.getvalue()
 
 # --- images: watermark with the eskele logo + domain

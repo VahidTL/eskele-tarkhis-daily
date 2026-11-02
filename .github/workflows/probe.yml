@@ -1,0 +1,21 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y -q libfribidi0 libraqm0 || true
+      - run: pip install pillow
+      - env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+        run: |
+          python3 - <<'PY'
+          src=open("run.py",encoding="utf-8").read()
+          g={"__file__":__import__("os").path.abspath("run.py"),"__name__":"probe"}
+          exec(src[:src.index("# --- Telegram channels")], g)
+          open("out.jpg","wb").write(g["cover"]("📢 **افزایش تعرفه** واردات کالا و تغییرات تازه در کمپین‌های تبلیغاتی گوگل"))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: out, path: out.jpg}
