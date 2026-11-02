@@ -136,17 +136,28 @@ def wco_text(url):
     return (title + "\n\n" + body)[:3500], media
 
 _last_gemini = [0.0]
-def ask(prompt, as_json=False, search=False):
+PAID_MODELS = ["gemini-3.1-flash-lite"]           # the only text model used on the paid AvalAI key
+PAID_IMAGE_MODELS = ["gemini-2.5-flash-image"]     # the only (cheapest) image model used on the paid AvalAI key
+
+def plan(models, paid):
+    """Every free (Google) attempt before any paid (AvalAI) one."""
+    return [(m, i) for i in range(len(KEYS)) for m in (models if BASES[i].startswith("https://generativelanguage") else paid)]
+
+def ask(prompt, as_json=False, search=False, max_tokens=None):
     wait = 13 - (time.time() - _last_gemini[0])  # free tier: keep under ~5 requests/minute
     if wait > 0: time.sleep(wait)
     _last_gemini[0] = time.time()
     req = {"contents": [{"parts": [{"text": prompt}]}]}
-    if as_json: req["generationConfig"] = {"responseMimeType": "application/json"}
-    if search: req["tools"] = [{"google_search": {}}]
-    body = json.dumps(req).encode()
+    cfg = {}
+    if as_json: cfg["responseMimeType"] = "application/json"
+    if max_tokens: cfg["maxOutputTokens"] = max_tokens
+    if cfg: req["generationConfig"] = cfg
     last = None
-    for model in MODELS:
-        for i, key in enumerate(KEYS):
+    for model, i in plan(MODELS, PAID_MODELS):
+            key = KEYS[i]
+            paid = not BASES[i].startswith("https://generativelanguage")
+            if search and paid: raise RuntimeError("search is free-key only")
+            body = json.dumps({**req, **({"tools": [{"google_search": {}}]} if search else {})}).encode()
             if (model, i) in dead_models: continue
             try:
                 r = json.loads(fetch(f"{BASES[i]}{model}:generateContent",
@@ -170,8 +181,8 @@ IMAGE_MODELS = ["gemini-3-pro-image", "gemini-3-pro-image-preview", "gemini-3.1-
 def gen_image(prompt):
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "16:9"}}}).encode()
-    for model in IMAGE_MODELS:
-        for i, key in enumerate(KEYS):
+    for model, i in plan(IMAGE_MODELS, PAID_IMAGE_MODELS):
+            key = KEYS[i]
             if (model, i) in dead_models: continue
             try:
                 r = json.loads(fetch(f"{BASES[i]}{model}:generateContent",
@@ -229,10 +240,10 @@ def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
         brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000]
-        try: brief = ask(brief_req, search=True)
+        try: brief = ask(brief_req, search=True, max_tokens=2500)
         except Exception as e:
-            print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req)
-        raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:12000]), as_json=True)
+            print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req, max_tokens=2500)
+        raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]), as_json=True, max_tokens=6000)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
         art = json.loads(raw)
         art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
