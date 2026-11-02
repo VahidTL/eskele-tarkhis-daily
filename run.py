@@ -1,4 +1,4 @@
-import os, io, re, base64, time, uuid, html, json, urllib.request, urllib.parse, urllib.error
+import datetime, email.utils, os, io, re, base64, time, uuid, html, json, urllib.request, urllib.parse, urllib.error
 
 DRY = os.environ.get("DRY_RUN") == "1"
 TG = os.environ.get("TG_TOKEN", "")
@@ -33,6 +33,8 @@ PROMPT = """تو دبیر خبر کانال «اسکله» (حمل بین‌ال
 
 خبرهای اخیراً منتشرشده در کانال:
 {recent}
+
+امروز {today} است. اگر خبر در اصل مربوط به گذشته‌ی دور است (مثلاً رویداد، قانون، قیمت یا آمار سال‌های قبل از امسال مثل ۱۴۰۳ یا ۲۰۲۴ که امروزی نیست)، فقط کلمه‌ی SKIP را بنویس.
 
 خبر جدید (منبع: {src}{lang}):
 {text}
@@ -92,6 +94,7 @@ def tg_items(ch):
         m = re.search(r'data-post="[^/]+/(\d+)"', blk)
         t = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', blk, re.S)
         if not m: continue
+        if not fresh((re.search(r'<time[^>]+datetime="([^"]+)"', blk) or [None, ""])[1]): continue
         media = new_media()
         for u in re.findall(r"tgme_widget_message_photo_wrap[^>]*background-image:url\('([^']+)'\)", blk):
             if u not in media["photos"]: media["photos"].append(html.unescape(u))
@@ -100,11 +103,24 @@ def tg_items(ch):
         out.append((int(m.group(1)), clean(t.group(1)) if t else "", media))
     return out
 
+MAX_AGE_DAYS = 30
+
+def fresh(stamp):
+    """False only when the item has a date and it is older than MAX_AGE_DAYS."""
+    if not stamp: return True
+    try:
+        try: d = email.utils.parsedate_to_datetime(stamp)
+        except Exception: d = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if d.tzinfo is None: d = d.replace(tzinfo=datetime.timezone.utc)
+        return (datetime.datetime.now(datetime.timezone.utc) - d).days <= MAX_AGE_DAYS
+    except Exception: return True
+
 def rss_items(url):
     x = fetch(url)
     out = []
     for it in re.findall(r"<item>(.*?)</item>", x, re.S):
         g = lambda tag: (re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", it, re.S) or [None, ""])[1]
+        if not fresh(clean(g("pubDate")) or clean(g("dc:date"))): continue
         link = clean(g("link")) or clean(g("guid"))
         raw = re.sub(r"<!\[CDATA\[|\]\]>", "", g("content:encoded") or g("description"))
         text = clean(re.sub(r"<!\[CDATA\[|\]\]>", "", g("title"))) + "\n\n" + clean(raw)
@@ -220,9 +236,14 @@ def gen_image(prompt, cf_prompt=None):
     return None
 
 
+def today_text():
+    n = datetime.datetime.now(datetime.timezone.utc)
+    jy = n.year - 621 if (n.month, n.day) >= (3, 21) else n.year - 622
+    return f"{n:%Y-%m-%d} (سال {n.year} میلادی، {jy} شمسی)"
+
 def rewrite(text, src, english=False):
     recent = "\n".join(f"- {r}" for r in state["recent"][-30:]) or "(هنوز موردی نیست)"
-    prompt = PROMPT.format(recent=recent, src=src, text=text,
+    prompt = PROMPT.format(today=today_text(), recent=recent, src=src, text=text,
                            lang="، متن انگلیسی" if english else "",
                            translate="متن انگلیسی است؛ آن را به فارسی روان و طبیعی ترجمه و بازنویسی کن (نه ترجمه‌ی تحت‌اللفظی؛ اصطلاحات گمرکی را با معادل رایج فارسی بنویس)." if english else "")
     return ask(prompt)
