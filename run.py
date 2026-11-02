@@ -274,6 +274,9 @@ def blog_draft(text, src, link, cover_jpg=None):
         art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
         art["title"] = art["title"][:180]
         art["source_url"] = link if link.startswith("https://") else None
+        if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
+            try: cover_jpg = cover(art["title"])
+            except Exception as e: print(f"cover for draft failed: {e}")
         if cover_jpg: art["cover"] = base64.b64encode(cover_jpg).decode()
         if DRY:
             print("  blog draft:", art["title"]); return
