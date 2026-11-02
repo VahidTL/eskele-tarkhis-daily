@@ -43,7 +43,7 @@ PROMPT = """تو دبیر خبر کانال «اسکله» (حمل بین‌ال
 3. اگر موضوع همان خبر قبلی است ولی اطلاعات تازه و مهمی دارد: با تیتر و ساختار و کلمات کاملاً متفاوت بنویس، روی نکته‌ی تازه تأکید کن و با «🔄 تکمیل خبر» شروع کن.
 4. در غیر این صورت: خبر را به فارسی روان و حرفه‌ای با کلمات خودت بازنویس. {translate}
 
-همه‌ی واقعیت‌ها، اعداد، نام‌ها و فهرست‌ها دقیق بماند و چیزی از خودت اضافه نکن. با یک ایموجی و تیتر کوتاه شروع کن. امضا، لینک و نام و آیدی کانال یا سایت منبع را حذف کن. فقط متن نهایی (یا SKIP/DUP) را بنویس."""
+همه‌ی واقعیت‌ها، اعداد، نام‌ها و فهرست‌ها دقیق بماند و چیزی از خودت اضافه نکن. با یک ایموجی و تیتر کوتاه شروع کن. امضا، لینک و نام و آیدی کانال یا سایت منبع را حذف کن. متن زیر عکس قرار می‌گیرد پس کوتاه و فشرده بنویس: حداکثر ۶۰۰ حرف (با ایموجی و تیتر). فقط متن نهایی (یا SKIP/DUP) را بنویس."""
 
 state = json.load(open("state.json"))
 if "last_id" in state:
@@ -293,6 +293,7 @@ def blog_draft(text, src, link, cover_jpg=None):
             tg_api("sendMessage", {"chat_id": OWNER_CHAT, "disable_web_page_preview": "true",
                    "text": f"📝 پیش‌نویس بلاگ آماده‌ی بررسی است:\n{art['title']}\n\nویرایش:\n{r['edit_url']}",
                    **({"reply_markup": json.dumps({"inline_keyboard": [[{"text": "✅ تأیید و انتشار", "url": r["approve_url"]}]]})} if r.get("approve_url") else {})})
+        return r
     except Exception as e:
         print(f"blog draft failed: {e}")
         if OWNER_CHAT and not DRY:
@@ -401,16 +402,17 @@ def get_photos(urls):
 
 def send(msg, media):
     base = {"chat_id": DST, "parse_mode": "HTML"}
-    photos = ([media["cover"]] if media.get("cover") else []) + get_photos(media["photos"][:3])
+    photos = [media["cover"]] if media.get("cover") else get_photos(media["photos"][:3])  # with a cover: one photo, text as its caption
     if DRY:
         for i, p in enumerate(photos): open(f"out_{i}.jpg", "wb").write(p)
         print(f"  media: {len(photos)} photo(s) watermarked, {len(media['videos'])} video(s), {len(media['docs'])} doc(s)")
         return
     caption_ok = len(msg) <= 1024
     sent_text = False
+    ref = None
     try:
         if len(photos) == 1 and caption_ok:
-            tg_api("sendPhoto", {**base, "caption": msg}, {"photo": ("p.jpg", photos[0])}); sent_text = True
+            ref = ("photo", json.loads(tg_api("sendPhoto", {**base, "caption": msg}, {"photo": ("p.jpg", photos[0])}))["result"]["message_id"]); sent_text = True
         elif photos:
             if len(photos) > 1:
                 att = json.dumps([{"type": "photo", "media": f"attach://p{i}"} for i in range(len(photos))])
@@ -420,14 +422,16 @@ def send(msg, media):
     except Exception as e:
         print(f"photo send failed: {e}")
     if not sent_text:
-        tg_api("sendMessage", {**base, "text": msg, "disable_web_page_preview": "true"})
+        ref = ("text", json.loads(tg_api("sendMessage", {**base, "text": msg, "disable_web_page_preview": "true"}))["result"]["message_id"])
     for v in media["videos"][:1]:
         try: tg_api("sendVideo", {"chat_id": DST, "video": v})
         except Exception as e: print(f"video send failed: {e}")
     for d in media["docs"][:2]:
         try: tg_api("sendDocument", {"chat_id": DST, "document": d})
         except Exception as e: print(f"document send failed: {e}")
+    return ref
 
+READ_MORE_PLAIN = "\n\n📖 مطالعه کامل در بلاگ سایت"
 sent = 0
 def publish(text, src, english=False, media=None, link=""):
     """Returns True when handled (sent, skipped or duplicate)."""
@@ -439,13 +443,23 @@ def publish(text, src, english=False, media=None, link=""):
         print(f"[{src}] {head}: {text[:60]!r}"); return True
     try: media["cover"] = cover(out)
     except Exception as e: print(f"cover failed: {e}")
-    msg = to_html(out)
-    if len(msg) + len(FOOTER) > 4000: msg = msg[:4000 - len(FOOTER)].rsplit("\n", 1)[0]
-    msg += FOOTER
+    body = to_html(out)
+    room = (1000 if media.get("cover") else 4000) - len(re.sub("<[^>]+>", "", html.unescape(FOOTER))) - len(READ_MORE_PLAIN)
+    while len(re.sub("<[^>]+>", "", html.unescape(body))) > room and "\n" in body: body = body.rsplit("\n", 1)[0].rstrip()  # drop trailing lines until it fits
+    if len(re.sub("<[^>]+>", "", html.unescape(body))) > room: body = body[:room - 1].rstrip() + "…"
+    msg = body + FOOTER
     if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
-    send(msg, media)
+    ref = send(msg, media)
     if not DRY: time.sleep(8)
-    if not DRY and link: blog_draft(text, src, link, media.get("cover"))
+    if not DRY and link:
+        r = blog_draft(text, src, link, media.get("cover"))
+        if r and r.get("url") and ref:
+            try:
+                more = f'\n\n📖 <a href="{html.escape(r["url"])}">مطالعه کامل در بلاگ سایت</a>'
+                edit = {"chat_id": DST, "message_id": ref[1], "parse_mode": "HTML"}
+                if ref[0] == "photo": tg_api("editMessageCaption", {**edit, "caption": body + more + FOOTER})
+                else: tg_api("editMessageText", {**edit, "text": body + more + FOOTER, "disable_web_page_preview": "true"})
+            except Exception as e: print(f"read-more link failed: {e}")
     state["recent"].append(out.replace("\n", " ")[:160])
     state["recent"] = state["recent"][-40:]
     sent += 1
