@@ -53,12 +53,12 @@ state.setdefault("recent", [])
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8"}
 
-def fetch_bytes(url, data=None, headers=None):
+def fetch_bytes(url, data=None, headers=None, timeout=60):
     req = urllib.request.Request(url, data=data, headers={**UA, **(headers or {})})
-    return urllib.request.urlopen(req, timeout=60).read()
+    return urllib.request.urlopen(req, timeout=timeout).read()
 
-def fetch(url, data=None, headers=None):
-    return fetch_bytes(url, data, headers).decode("utf-8", "replace")
+def fetch(url, data=None, headers=None, timeout=60):
+    return fetch_bytes(url, data, headers, timeout).decode("utf-8", "replace")
 
 def call(url, data=None, headers=None):
     for wait in (15, 40, 0):
@@ -150,7 +150,7 @@ def ask(prompt, as_json=False, search=False):
             if (model, i) in dead_models: continue
             try:
                 r = json.loads(fetch(f"{BASES[i]}{model}:generateContent",
-                                     body, {"x-goog-api-key": key, "content-type": "application/json"}))
+                                     body, {"x-goog-api-key": key, "content-type": "application/json"}, timeout=300))
                 return "".join(p.get("text", "") for p in r["candidates"][0]["content"]["parts"]).strip()
             except urllib.error.HTTPError as e:
                 last = e
@@ -160,6 +160,8 @@ def ask(prompt, as_json=False, search=False):
                     print(f"model {model} overloaded ({e.code}), trying next"); continue
                 if search and e.code == 400: raise
                 raise
+            except (TimeoutError, urllib.error.URLError) as e:  # long briefs can outlast a slow key: try the next one
+                last = e; print(f"model {model} key{i + 1} timed out ({e}), trying next"); continue
     raise last or RuntimeError("no Gemini model available")
 
 # strongest image model first; each is tried on every key before falling back to a weaker one
