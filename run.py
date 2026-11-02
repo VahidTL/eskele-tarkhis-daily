@@ -257,7 +257,7 @@ def blog_draft(text, src, link, cover_jpg=None):
 IMAGE_PROMPT = """Create a high-quality, photorealistic editorial cover photo (16:9) for a news story about international shipping, customs clearance, ports, containers and trade.
 Headline (Persian): «{title}»
 Show the real-world subject of the story in a clean, modern, professional style with natural light and depth.
-Absolutely no text, letters, numbers, logos, flags or watermarks anywhere in the image."""
+Absolutely no text, letters, words, numbers, labels, UI text, screens with writing, logos, flags or watermarks anywhere in the image (Persian text is added later). Keep any screens or documents blurred or blank."""
 
 def cover(out):
     from PIL import Image, ImageDraw, ImageFont, ImageOps
