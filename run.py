@@ -178,7 +178,23 @@ def ask(prompt, as_json=False, search=False, max_tokens=None):
 # strongest image model first; each is tried on every key before falling back to a weaker one
 IMAGE_MODELS = ["gemini-3-pro-image", "gemini-3-pro-image-preview", "gemini-3.1-flash-image",
                 "gemini-3.1-flash-image-preview", "gemini-2.5-flash-image", "gemini-3.1-flash-lite-image"]
+CF_TOKEN, CF_ACCOUNT = os.environ.get("CF_API_TOKEN"), os.environ.get("CF_ACCOUNT_ID")
+
+def gen_image_cf(prompt):
+    """Cloudflare Workers AI, FLUX.1 schnell: free daily allowance, so it goes before any paid model."""
+    if not (CF_TOKEN and CF_ACCOUNT): return None
+    try:
+        body = json.dumps({"prompt": prompt, "steps": 6}).encode()
+        r = json.loads(fetch(f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell",
+                             body, {"Authorization": f"Bearer {CF_TOKEN}", "content-type": "application/json"}, timeout=120))
+        print("image by cloudflare flux-1-schnell")
+        return base64.b64decode(r["result"]["image"])
+    except Exception as e:
+        print(f"cloudflare image failed: {e}"); return None
+
 def gen_image(prompt):
+    img = gen_image_cf(prompt)
+    if img: return img
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "16:9"}}}).encode()
     for model, i in plan(IMAGE_MODELS, PAID_IMAGE_MODELS):
