@@ -254,8 +254,9 @@ ARTICLE_PROMPT = """تو نویسنده‌ی ارشد بلاگ «اسکله» (�
 {brief}
 
 فقط یک شیء JSON معتبر برگردان:
-{{"title": "H1 / عنوان سئو (حداکثر ۷۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "seo_description": "توضیح متا تا ۱۵۵ حرف", "paragraphs": ["پاراگراف", "## تیتر H2", "پاراگراف", "### تیتر H3 را هم با ## بنویس", "..."]}}
-هر عنصر paragraphs یا یک پاراگراف است یا تیتری که با «## » شروع می‌شود. حداکثر ۵۵ عنصر."""
+{{"title": "H1 / عنوان سئو (حداکثر ۷۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "slug": "ترجمه‌ی انگلیسی عنوان به‌صورت اسلاگ: فقط حروف کوچک لاتین و خط تیره، حداکثر ۷ کلمه", "seo_description": "توضیح متا تا ۱۵۵ حرف", "paragraphs": ["پاراگراف", "## تیتر H2", "پاراگراف", "### تیتر H3 را هم با ## بنویس", "..."]}}
+هر عنصر paragraphs یا یک پاراگراف است یا تیتری که با «## » شروع می‌شود. حداکثر ۵۵ عنصر.
+متن نهایی مقاله است، نه بریف: هیچ عبارت داخل [ ]، برچسب مثل CTA یا یادداشت نویسنده، یا علامت ` در آن نباشد. در پایان یک پاراگراف دعوت‌به‌اقدام عادی و کوتاه بنویس (مثلاً دعوت به گفتگو یا مشاوره با تیم برند)؛ فایل، چک‌لیست، دوره یا پیشنهاد رایگان نساز که وجود ندارد."""
 
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
@@ -271,6 +272,12 @@ def blog_draft(text, src, link, cover_jpg=None):
             except ValueError:
                 if attempt == 2: raise
                 print("article JSON cut off, retrying")
+        def tidy(p):  # drop leftover brief notes: "[CTA: x]" keeps x, any other [..] note is removed; no backticks
+            p = re.sub(r"\[\s*(?:CTA|Call to action)\s*[:：]\s*([^\]]*)\]", r"\1", p, flags=re.I)
+            p = re.sub(r"\[[^\]]*\]", "", p).replace("`", "")
+            return re.sub(r"\s{2,}", " ", p).strip()
+        art["paragraphs"] = [tidy(p) for p in art["paragraphs"] if isinstance(p, str)]
+        art["slug"] = re.sub(r"[^a-z0-9]+", "-", str(art.get("slug", "")).lower()).strip("-")[:90]
         art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
         art["title"] = art["title"][:180]
         art["source_url"] = link if link.startswith("https://") else None
