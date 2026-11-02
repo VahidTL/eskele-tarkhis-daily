@@ -261,12 +261,16 @@ def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
         brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000]
-        try: brief = ask(brief_req, search=True, max_tokens=2500)
+        try: brief = ask(brief_req, search=True, max_tokens=8000)
         except Exception as e:
-            print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req, max_tokens=2500)
-        raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]), as_json=True, max_tokens=6000)
-        raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
-        art = json.loads(raw)
+            print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req, max_tokens=8000)
+        for attempt in (1, 2):  # thinking tokens share the output cap, so a cut-off JSON is possible: retry once
+            raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]), as_json=True, max_tokens=20000)
+            raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
+            try: art = json.loads(raw); break
+            except ValueError:
+                if attempt == 2: raise
+                print("article JSON cut off, retrying")
         art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
         art["title"] = art["title"][:180]
         art["source_url"] = link if link.startswith("https://") else None
