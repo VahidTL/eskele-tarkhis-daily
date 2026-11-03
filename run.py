@@ -291,7 +291,7 @@ def rewrite(text, src, english=False):
     recent = "\n".join(f"- {r}" for r in state["recent"][-30:]) or "(هنوز موردی نیست)"
     prompt = PROMPT.format(today=today_text(), recent=recent, src=src, text=text,
                            lang="، متن انگلیسی" if english else "",
-                           translate="متن انگلیسی است؛ آن را به فارسی روان و طبیعی ترجمه و بازنویسی کن (نه ترجمه‌ی تحت‌اللفظی؛ اصطلاحات گمرکی را با معادل رایج فارسی بنویس)." if english else "")
+                           translate="متن انگلیسی است؛ آن را به فارسی روان و طبیعی ترجمه و بازنویسی کن (نه ترجمه‌ی تحت‌اللفظی؛ اصطلاحات گمرکی را با معادل رایج فارسی بنویس). اگر در متن منبع سالی آمده، همان سال میلادی را بنویس (مثل ۲۰۲۶ یا 2026) و به سال شمسی تبدیل نکن." if english else "")
     return ask(prompt)
 
 TEHRAN = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
@@ -375,15 +375,18 @@ def fix_headings(paras):
 
 SHOW_SOURCE = False  # the blog does not name the source for now
 
+def external_en(src): return src == "wco"
+
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
+    year_rule = "\n\nقانون سال: منبع انگلیسی است؛ هر سالی که می‌آوری میلادی باشد (مثل ۲۰۲۶)، نه شمسی." if external_en(src) else ""
     try:
-        brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000] + date_rule()
+        brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000] + date_rule() + year_rule
         try: brief = ask(brief_req, search=True, max_tokens=8000)
         except Exception as e:
             print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req, max_tokens=8000)
         for attempt in (1, 2):  # thinking tokens share the output cap, so a cut-off JSON is possible: retry once
-            raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]) + date_rule(), as_json=True, max_tokens=20000)
+            raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]) + date_rule() + year_rule, as_json=True, max_tokens=20000)
             raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
             try: art = json.loads(raw); break
             except ValueError:
@@ -409,7 +412,7 @@ def blog_draft(text, src, link, cover_jpg=None):
                             {"Content-Type": "application/json", "X-Ingest-Token": BLOG_TOKEN}))
         if OWNER_CHAT:
             tg_api("sendMessage", {"chat_id": OWNER_CHAT, "disable_web_page_preview": "true",
-                   "text": f"📝 پیش‌نویس بلاگ آماده‌ی بررسی است:\n{art['title']}\n\nویرایش:\n{r['edit_url']}",
+                   "text": f"📝 پیش‌نویس بلاگ آماده‌ی بررسی است:\n{art['title']}\n\n🔗 منبع: {src}" + (f"\n{link}" if link else "") + f"\n\nویرایش:\n{r['edit_url']}",
                    **({"reply_markup": json.dumps({"inline_keyboard": [[{"text": "✅ تأیید و انتشار", "url": r["approve_url"]}]]})} if r.get("approve_url") else {})})
         return r
     except Exception as e:
