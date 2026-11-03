@@ -200,21 +200,45 @@ SCENES = ['A busy container port with stacked plain-coloured shipping containers
 def scene_for(title):
     return BASE_SCENE + SCENES[sum(map(ord, title)) % len(SCENES)] + " Clean scene with plain surfaces only, nothing with writing on it."
 def scene_ai(title):
-    """English, story-specific scene prompt for FLUX (it cannot read Persian). Falls back to the fixed scenes."""
+    """(prompt, strong). English, story-specific scene prompt for FLUX (it cannot read Persian); strong = a major story that
+    deserves the better (paid) image model, at most 3 a day. Falls back to the fixed scenes."""
     try:
+        recent = "\n".join("- " + r for r in state.get("scenes", [])[-10:]) or "(none yet)"
         t = ask(f"""Persian news headline: «{title}»
-Step 1: translate the headline into English. Step 2: write ONE image-generation prompt (max 60 words, English) for a photorealistic editorial photo that visually shows the concrete subject of this story (shipping, ports, customs clearance, containers, trade).
-Rules: describe real objects, people seen from behind or from a distance, places and lighting; wide 16:9, shallow depth of field, natural light. No text, letters, numbers, logos, flags, charts with labels or readable screens anywhere: screens are blank or blurred, surfaces plain.
-Output exactly two lines: 'EN: <translated headline>' then 'PROMPT: <the prompt>'.""" , max_tokens=1500)
+Topic area: shipping, ports, customs clearance, containers, trade and import/export.
+Step 1: translate the headline into English.
+Step 2: write ONE image-generation prompt (max 70 words, English) for a 16:9 cover image that visually shows the subject of this story.
+Keep the scene in the world of ports, shipping, customs and trade (container port, cranes, cargo ship, trucks, warehouse, customs gate, inspection). For abstract news tie it in through ONE concrete object or metaphor (currency/exchange rate: plain banknote stacks and a balance scale beside containers; tariff or ban: a closed barrier gate or a heavy padlock on a container; rules and lists: folders and a rubber stamp without any writing; car imports: a car-carrier ship or rows of cars at the quay; shipping delays: a ship waiting at anchor at dusk).
+If the story is abstract (a rule, a number, a policy, an announcement) use a graphic style: clean flat isometric 3D illustration with soft gradients, deep harbour blue and gold accents. Otherwise use a photorealistic editorial photo with natural light and shallow depth of field.
+Do NOT repeat the setting, camera angle or main objects of these recent covers; make this one visibly different:
+{recent}
+Absolutely no text, letters, numbers, logos or flags anywhere; screens and papers are blank or blurred, surfaces plain.
+Step 3: say whether this is a major, high-impact story (big policy change, major platform launch or breaking news): yes or no. Most stories are no.
+Output exactly four lines:
+EN: <translated headline>
+STYLE: photo or graphic
+STRONG: yes or no
+PROMPT: <the prompt>""", max_tokens=2500)
         m = re.search(r"PROMPT:\s*(.+)", t, re.S)
         en = re.search(r"EN:\s*(.+)", t)
+        graphic = bool(re.search(r"STYLE:\s*graphic", t, re.I))
+        want_strong = bool(re.search(r"STRONG:\s*yes", t, re.I))
         if m:
-            pr = m.group(1).strip().splitlines()[0][:600]
-            print("scene prompt:", (en.group(1).strip() if en else ""), "|", pr)
-            return BASE_SCENE + pr + " No text or writing anywhere in the image."
+            pr = m.group(1).strip().splitlines()[0][:700]
+            day = datetime.datetime.now(TEHRAN).strftime("%Y-%m-%d")
+            used = state.setdefault("strong", {})
+            strong = want_strong and used.get(day, 0) < 3 and not DRY
+            if strong:
+                for k in [k for k in used if k != day]: del used[k]
+                used[day] = used.get(day, 0) + 1
+            state.setdefault("scenes", []).append(pr[:140]); state["scenes"] = state["scenes"][-10:]
+            print("scene prompt:", (en.group(1).strip() if en else ""), "|", ("graphic" if graphic else "photo"), "| strong" if strong else "", "|", pr)
+            base = "Clean editorial 3D illustration, wide 16:9, soft lighting. " if graphic else BASE_SCENE
+            return base + pr + " No text or writing anywhere in the image.", strong
     except Exception as e:
         print(f"scene prompt failed: {e}")
-    return scene_for(title)
+    return scene_for(title), False
+
 CF_TOKEN, CF_ACCOUNT = os.environ.get("CF_API_TOKEN"), os.environ.get("CF_ACCOUNT_ID")
 
 def gen_image_cf(prompt):
@@ -229,9 +253,15 @@ def gen_image_cf(prompt):
     except Exception as e:
         print(f"cloudflare image failed: {e}"); return None
 
-def gen_image(prompt, cf_prompt=None):
-    img = gen_image_cf(cf_prompt or prompt)
-    if img: return img
+def gen_image(prompt, cf_prompt=None, strong=False):
+    if not strong:
+        img = gen_image_cf(cf_prompt or prompt)
+        if img: return img
+    img = gen_image_gemini((cf_prompt or prompt) if strong else prompt)
+    if img or not strong: return img
+    return gen_image_cf(cf_prompt or prompt)
+
+def gen_image_gemini(prompt):
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "16:9"}}}).encode()
     for model, i in plan(IMAGE_MODELS, PAID_IMAGE_MODELS):
@@ -300,7 +330,7 @@ ARTICLE_PROMPT = """تو نویسنده‌ی ارشد بلاگ «اسکله» (�
 
 فقط یک شیء JSON معتبر برگردان:
 {{"title": "H1 / عنوان سئو (حداکثر ۷۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "slug": "ترجمه‌ی انگلیسی عنوان به‌صورت اسلاگ: فقط حروف کوچک لاتین و خط تیره، حداکثر ۷ کلمه", "seo_description": "توضیح متا تا ۱۵۵ حرف", "paragraphs": ["پاراگراف", "## تیتر H2", "پاراگراف", "### تیتر H3 را هم با ## بنویس", "..."]}}
-هر عنصر paragraphs یا یک پاراگراف است یا تیتری که با «## » شروع می‌شود. حداکثر ۵۵ عنصر.
+هر عنصر paragraphs یا یک پاراگراف است یا تیتر: «## » برای H2 و «### » برای H3. سلسله‌مراتب را درست رعایت کن: بخش‌های اصلی H2 باشند و زیرمجموعه‌ی هر بخش H3؛ تیتر «سوالات متداول» یک H2 است و هر سوال زیر آن حتماً H3 (با «### »)، نه H2؛ H3 هرگز بدون H2 قبل از خود نیاید. حداکثر ۵۵ عنصر.
 متن نهایی مقاله است، نه بریف: هیچ عبارت داخل [ ]، برچسب مثل CTA یا یادداشت نویسنده، یا علامت ` در آن نباشد. در پایان یک پاراگراف دعوت‌به‌اقدام عادی و کوتاه بنویس (مثلاً دعوت به گفتگو یا مشاوره با تیم برند)؛ فایل، چک‌لیست، دوره یا پیشنهاد رایگان نساز که وجود ندارد."""
 
 def date_rule():
@@ -322,6 +352,27 @@ def strip_old_years(s, title=False):
     s = re.sub(r"\(\s*\)|\[\s*\]|«\s*»|\(\s*[،,؛-]*\s*\)", "", s)  # brackets left empty by the removal
     return re.sub(r"[ \t]{2,}", " ", s).strip(" :،-—") if title else re.sub(r"[ \t]{2,}", " ", s)
 
+H3_SUPPORTED = False  # flip to True once the sites run the version that renders "### " as H3
+
+def fix_headings(paras):
+    """Heading hierarchy: sections are H2 ("## "), their sub-points H3 ("### "). Every question under an FAQ section becomes an H3,
+    and an H3 that comes before any H2 is promoted to H2."""
+    out, in_faq, seen_h2 = [], False, False
+    for p in paras:
+        m = re.match(r"^(#{1,6})\s*(.+)$", p.strip(), re.S)
+        if not m: out.append(p); continue
+        text = m.group(2).strip()
+        level = 3 if len(m.group(1)) >= 3 else 2
+        is_faq = bool(re.search(r"سوال(?:ات|ها)?\s*(?:و\s*پاسخ\s*)?متداول|پرسش(?:‌|\s)?های\s*متداول|FAQ|Frequently Asked", text, re.I))
+        if is_faq and len(m.group(1)) <= 2: level = 2
+        elif in_faq and (text.rstrip().endswith(("؟", "?")) or level == 3): level = 3
+        elif in_faq and level == 2 and not is_faq: in_faq = False
+        if level == 3 and not seen_h2: level = 2
+        if level == 2: seen_h2 = True
+        if is_faq and level == 2: in_faq = True
+        out.append("#" * level + " " + text)
+    return out
+
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
@@ -342,7 +393,8 @@ def blog_draft(text, src, link, cover_jpg=None):
             return re.sub(r"\s{2,}", " ", p).strip()
         art["paragraphs"] = [strip_old_years(tidy(p)) for p in art["paragraphs"] if isinstance(p, str)]
         art["slug"] = re.sub(r"[^a-z0-9]+", "-", str(art.get("slug", "")).lower()).strip("-")[:90]
-        art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
+        art["paragraphs"] = fix_headings([p for p in art["paragraphs"] if isinstance(p, str) and p.strip()])[:60]
+        if not H3_SUPPORTED: art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"]]  # the site only knows H2 until its update with H3 support is installed
         art["title"] = strip_old_years(art["title"], True)[:180]
         art["source_url"] = link if link.startswith("https://") else None
         if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
@@ -378,7 +430,8 @@ def cover(out):
     bg, bg2, fg, accent, sub = (12, 36, 48), (18, 52, 68), (232, 240, 244), (219, 167, 60), (91, 191, 229)
     here = os.path.dirname(os.path.abspath(__file__))
     fpath = os.path.join(here, "Vazir-Bold.ttf")
-    photo = gen_image(IMAGE_PROMPT.format(title=title), scene_ai(title))
+    cf_prompt, strong = scene_ai(title)
+    photo = gen_image(IMAGE_PROMPT.format(title=title), cf_prompt, strong)
     if photo:
         im = ImageOps.fit(Image.open(io.BytesIO(photo)).convert("RGB"), (W, H), Image.LANCZOS)
         band_h = 230
