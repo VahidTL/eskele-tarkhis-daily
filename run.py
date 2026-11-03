@@ -12,7 +12,7 @@ MODELS = ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite",
 dead_models = set()
 KEYWORDS = re.compile("گمرک|ترخیص|تعرفه|واردات|صادرات|بازرگانی|تجارت|ارز|بندر|حمل|ترانزیت|کالا|کانتینر|مرز|مبادلات|ثبت سفارش|تسهیل")
 
-TG_CHANNELS = ["Tarkhis_Karan", "Gomrok_news"]
+TG_CHANNELS = ["Tarkhis_Karan", "Gomrok_news", "Rahkar_tejarat"]
 RSS = {
     "akhbargomroki": "https://akhbargomroki.com/feed",
     "mefa-news": "http://mefa.ir/rss/tp/11352",
