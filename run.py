@@ -373,6 +373,8 @@ def fix_headings(paras):
         out.append("#" * level + " " + text)
     return out
 
+SHOW_SOURCE = False  # the blog does not name the source for now
+
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
@@ -396,7 +398,7 @@ def blog_draft(text, src, link, cover_jpg=None):
         art["paragraphs"] = fix_headings([p for p in art["paragraphs"] if isinstance(p, str) and p.strip()])[:60]
         if not H3_SUPPORTED: art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"]]  # the site only knows H2 until its update with H3 support is installed
         art["title"] = strip_old_years(art["title"], True)[:180]
-        art["source_url"] = link if link.startswith("https://") else None
+        art["source_url"] = (link if link.startswith("https://") else None) if SHOW_SOURCE else None
         if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
             try: cover_jpg = cover(art["title"])
             except Exception as e: print(f"cover for draft failed: {e}")
