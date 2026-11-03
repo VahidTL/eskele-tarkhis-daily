@@ -264,6 +264,14 @@ def rewrite(text, src, english=False):
                            translate="متن انگلیسی است؛ آن را به فارسی روان و طبیعی ترجمه و بازنویسی کن (نه ترجمه‌ی تحت‌اللفظی؛ اصطلاحات گمرکی را با معادل رایج فارسی بنویس)." if english else "")
     return ask(prompt)
 
+TEHRAN = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
+def stat(src, key):
+    day = datetime.datetime.now(TEHRAN).strftime("%Y-%m-%d")
+    st = state.setdefault("stats", {})
+    d = st.setdefault(day, {}).setdefault(src, {})
+    d[key] = d.get(key, 0) + 1
+    for old in sorted(st)[:-7]: del st[old]
+
 def save_state():
     if not DRY:
         json.dump(state, open("state.json", "w"), ensure_ascii=False)
@@ -477,7 +485,7 @@ def publish(text, src, english=False, media=None, link=""):
     out = rewrite(text, src, english)
     head = out.split()[0].upper() if out.split() else ""
     if head in ("SKIP", "DUP") and len(out) < 8:
-        print(f"[{src}] {head}: {text[:60]!r}"); return True
+        print(f"[{src}] {head}: {text[:60]!r}"); stat(src, "skipped"); return True
     try: media["cover"] = cover(out)
     except Exception as e: print(f"cover failed: {e}")
     body = to_html(out)
@@ -487,9 +495,10 @@ def publish(text, src, english=False, media=None, link=""):
     msg = body + FOOTER
     if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
     ref = send(msg, media)
-    if not DRY: time.sleep(8)
+    if not DRY: time.sleep(8); stat(src, "posted")
     if not DRY and link:
         r = blog_draft(text, src, link, media.get("cover"))
+        stat(src, "blog_ok" if r else "blog_fail")
         if r and r.get("url") and ref:
             try:
                 more = f'\n\n📖 <a href="{html.escape(r["url"])}">مطالعه کامل در بلاگ سایت</a>'
