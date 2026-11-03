@@ -319,6 +319,7 @@ def strip_old_years(s, title=False):
     else:
         s = re.sub(r"(?:(?:در|از|تا|طی)\s+)?(?:سال\s+)(?<![0-9۰-۹])" + num + r"(?![0-9۰-۹])(?:\s*(?:میلادی|شمسی|هجری))?", sub, s)
         s = re.sub(r"(?<![0-9۰-۹])" + num + r"(?![0-9۰-۹])\s*(?:میلادی|شمسی|هجری)", sub, s)
+    s = re.sub(r"\(\s*\)|\[\s*\]|«\s*»|\(\s*[،,؛-]*\s*\)", "", s)  # brackets left empty by the removal
     return re.sub(r"[ \t]{2,}", " ", s).strip(" :،-—") if title else re.sub(r"[ \t]{2,}", " ", s)
 
 def blog_draft(text, src, link, cover_jpg=None):
