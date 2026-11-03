@@ -304,17 +304,22 @@ ARTICLE_PROMPT = """تو نویسنده‌ی ارشد بلاگ «اسکله» (�
 متن نهایی مقاله است، نه بریف: هیچ عبارت داخل [ ]، برچسب مثل CTA یا یادداشت نویسنده، یا علامت ` در آن نباشد. در پایان یک پاراگراف دعوت‌به‌اقدام عادی و کوتاه بنویس (مثلاً دعوت به گفتگو یا مشاوره با تیم برند)؛ فایل، چک‌لیست، دوره یا پیشنهاد رایگان نساز که وجود ندارد."""
 
 def date_rule():
-    return (f"\n\nقانون تاریخ: امروز {today_text()} است. هیچ سالی (مثل ۱۴۰۳ یا ۲۰۲۴) را از خودت در عنوان یا متن ننویس؛ سال فقط اگر در خبر اصلی آمده باشد. "
+    return (f"\n\nقانون تاریخ: امروز {today_text()} است. هرگز سال قدیمی ننویس (۱۴۰۴ و قبل‌تر یا ۲۰۲۵ و قبل‌تر ممنوع)؛ فقط سال جاری یا بعد از آن (۱۴۰۵ و ۲۰۲۶ به بالا) مجاز است، و آن هم فقط اگر واقعاً لازم باشد. "
             "اگر لازم است زمان آینده یا حال را بگویی از «امسال» و «سال آینده» یا سال جاری همین تاریخ استفاده کن، نه سال‌های گذشته.")
 
-def strip_stale_years(title, source):
-    """Past years the model made up (not present in the source news) are removed from the title."""
-    tr = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
-    src, t = source.translate(tr), title.translate(tr)
-    for y in set(re.findall(r"(?<!\d)(13[89]\d|140[0-4]|20[0-2]\d)(?!\d)", t)):
-        if int(y) < (2026 if y[0] == "2" else 1405) and y not in src:
-            title = re.sub(r"\s*(?:سال\s*)?(?:" + y + "|" + y.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")) + r")\s*", " ", title)
-    return re.sub(r"\s{2,}", " ", title).strip(" :،-—")
+_FA = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+def strip_old_years(s, title=False):
+    """Never show a past year: 1404 and earlier / 2025 and earlier are removed (in a title any such number, in text a number marked as a year)."""
+    def old(y):
+        y = int(y.translate(_FA)); return 1380 <= y <= 1404 or 2000 <= y <= 2025
+    num = r"([0-9۰-۹]{4})"
+    def sub(m):
+        return " " if old(m.group(m.lastindex)) else m.group(0)
+    if title: s = re.sub(r"(?:سال\s*)?(?<![0-9۰-۹])" + num + r"(?![0-9۰-۹])", sub, s)
+    else:
+        s = re.sub(r"(?:(?:در|از|تا|طی)\s+)?(?:سال\s+)(?<![0-9۰-۹])" + num + r"(?![0-9۰-۹])(?:\s*(?:میلادی|شمسی|هجری))?", sub, s)
+        s = re.sub(r"(?<![0-9۰-۹])" + num + r"(?![0-9۰-۹])\s*(?:میلادی|شمسی|هجری)", sub, s)
+    return re.sub(r"[ \t]{2,}", " ", s).strip(" :،-—") if title else re.sub(r"[ \t]{2,}", " ", s)
 
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
@@ -334,10 +339,10 @@ def blog_draft(text, src, link, cover_jpg=None):
             p = re.sub(r"\[\s*(?:CTA|Call to action)\s*[:：]\s*([^\]]*)\]", r"\1", p, flags=re.I)
             p = re.sub(r"\[[^\]]*\]", "", p).replace("`", "")
             return re.sub(r"\s{2,}", " ", p).strip()
-        art["paragraphs"] = [tidy(p) for p in art["paragraphs"] if isinstance(p, str)]
+        art["paragraphs"] = [strip_old_years(tidy(p)) for p in art["paragraphs"] if isinstance(p, str)]
         art["slug"] = re.sub(r"[^a-z0-9]+", "-", str(art.get("slug", "")).lower()).strip("-")[:90]
         art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
-        art["title"] = strip_stale_years(art["title"], text)[:180]
+        art["title"] = strip_old_years(art["title"], True)[:180]
         art["source_url"] = link if link.startswith("https://") else None
         if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
             try: cover_jpg = cover(art["title"])
@@ -501,6 +506,7 @@ def publish(text, src, english=False, media=None, link=""):
         print(f"[{src}] {head}: {text[:60]!r}"); stat(src, "skipped"); return True
     try: media["cover"] = cover(out)
     except Exception as e: print(f"cover failed: {e}")
+    out = strip_old_years(out)
     body = to_html(out)
     room = (1000 if media.get("cover") else 4000) - len(re.sub("<[^>]+>", "", html.unescape(FOOTER))) - len(READ_MORE_PLAIN)
     while len(re.sub("<[^>]+>", "", html.unescape(body))) > room and "\n" in body: body = body.rsplit("\n", 1)[0].rstrip()  # drop trailing lines until it fits
