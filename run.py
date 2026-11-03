@@ -303,15 +303,28 @@ ARTICLE_PROMPT = """تو نویسنده‌ی ارشد بلاگ «اسکله» (�
 هر عنصر paragraphs یا یک پاراگراف است یا تیتری که با «## » شروع می‌شود. حداکثر ۵۵ عنصر.
 متن نهایی مقاله است، نه بریف: هیچ عبارت داخل [ ]، برچسب مثل CTA یا یادداشت نویسنده، یا علامت ` در آن نباشد. در پایان یک پاراگراف دعوت‌به‌اقدام عادی و کوتاه بنویس (مثلاً دعوت به گفتگو یا مشاوره با تیم برند)؛ فایل، چک‌لیست، دوره یا پیشنهاد رایگان نساز که وجود ندارد."""
 
+def date_rule():
+    return (f"\n\nقانون تاریخ: امروز {today_text()} است. هیچ سالی (مثل ۱۴۰۳ یا ۲۰۲۴) را از خودت در عنوان یا متن ننویس؛ سال فقط اگر در خبر اصلی آمده باشد. "
+            "اگر لازم است زمان آینده یا حال را بگویی از «امسال» و «سال آینده» یا سال جاری همین تاریخ استفاده کن، نه سال‌های گذشته.")
+
+def strip_stale_years(title, source):
+    """Past years the model made up (not present in the source news) are removed from the title."""
+    tr = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    src, t = source.translate(tr), title.translate(tr)
+    for y in set(re.findall(r"(?<!\d)(13[89]\d|140[0-4]|20[0-2]\d)(?!\d)", t)):
+        if int(y) < (2026 if y[0] == "2" else 1405) and y not in src:
+            title = re.sub(r"\s*(?:سال\s*)?(?:" + y + "|" + y.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")) + r")\s*", " ", title)
+    return re.sub(r"\s{2,}", " ", title).strip(" :،-—")
+
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     try:
-        brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000]
+        brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000] + date_rule()
         try: brief = ask(brief_req, search=True, max_tokens=8000)
         except Exception as e:
             print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req, max_tokens=8000)
         for attempt in (1, 2):  # thinking tokens share the output cap, so a cut-off JSON is possible: retry once
-            raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]), as_json=True, max_tokens=20000)
+            raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]) + date_rule(), as_json=True, max_tokens=20000)
             raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
             try: art = json.loads(raw); break
             except ValueError:
@@ -324,7 +337,7 @@ def blog_draft(text, src, link, cover_jpg=None):
         art["paragraphs"] = [tidy(p) for p in art["paragraphs"] if isinstance(p, str)]
         art["slug"] = re.sub(r"[^a-z0-9]+", "-", str(art.get("slug", "")).lower()).strip("-")[:90]
         art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"] if isinstance(p, str) and p.strip()][:60]
-        art["title"] = art["title"][:180]
+        art["title"] = strip_stale_years(art["title"], text)[:180]
         art["source_url"] = link if link.startswith("https://") else None
         if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
             try: cover_jpg = cover(art["title"])
