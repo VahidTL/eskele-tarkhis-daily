@@ -34,14 +34,14 @@ PROMPT = """تو دبیر خبر کانال «اسکله» (حمل بین‌ال
 خبرهای اخیراً منتشرشده در کانال:
 {recent}
 
-امروز {today} است. اگر خبر در اصل مربوط به گذشته‌ی دور است (مثلاً رویداد، قانون، قیمت یا آمار سال‌های قبل از امسال مثل ۱۴۰۳ یا ۲۰۲۴ که امروزی نیست)، فقط کلمه‌ی SKIP را بنویس.
+امروز {today} است. اگر خبر در اصل مربوط به گذشته‌ی دور است (مثلاً رویداد، قانون، قیمت یا آمار سال‌های قبل از امسال مثل ۱۴۰۳ یا ۲۰۲۴ که امروزی نیست)، فقط بنویس «SKIP قدیمی».
 
 خبر جدید (منبع: {src}{lang}):
 {text}
 
 قواعد (به ترتیب):
-1. اگر خبر ربطی به گمرک، ترخیص، تعرفه، واردات و صادرات، تجارت خارجی، حمل‌ونقل بین‌المللی، بنادر و مناطق آزاد، ارز بازرگانی یا مقررات بازرگانی ندارد، یا فقط تبریک/تاریخ روز است: فقط کلمه‌ی SKIP را بنویس.
-2. اگر همین خبر قبلاً در کانال منتشر شده (حتی با منبع یا لحن دیگر) و اطلاعات تازه‌ی مهمی ندارد: فقط کلمه‌ی DUP را بنویس.
+1. اگر خبر ربطی به گمرک، ترخیص، تعرفه، واردات و صادرات، تجارت خارجی، حمل‌ونقل بین‌المللی، بنادر و مناطق آزاد، ارز بازرگانی یا مقررات بازرگانی ندارد، یا فقط تبریک/تاریخ روز است: فقط بنویس «SKIP نامرتبط» (و یک دلیل خیلی کوتاه بعدش اگر لازم است).
+2. اگر همین خبر قبلاً در کانال منتشر شده (حتی با منبع یا لحن دیگر) و اطلاعات تازه‌ی مهمی ندارد: فقط بنویس «DUP تکراری».
 3. اگر موضوع همان خبر قبلی است ولی اطلاعات تازه و مهمی دارد: با تیتر و ساختار و کلمات کاملاً متفاوت بنویس، روی نکته‌ی تازه تأکید کن و با «🔄 تکمیل خبر» شروع کن.
 4. در غیر این صورت: خبر را به فارسی روان و حرفه‌ای با کلمات خودت بازنویس. {translate}
 
@@ -302,6 +302,23 @@ def stat(src, key):
     d[key] = d.get(key, 0) + 1
     for old in sorted(st)[:-7]: del st[old]
 
+def logwhy(src, kind, why, ref=""):
+    """One line per skipped item / failed draft with its reason, for the nightly report."""
+    day = datetime.datetime.now(TEHRAN).strftime("%Y-%m-%d")
+    lg = state.setdefault("log", {})
+    lg.setdefault(day, []).append({"src": src, "kind": kind, "why": why[:90], "ref": ref[:140]})
+    lg[day] = lg[day][-80:]
+    for old in sorted(lg)[:-7]: del lg[old]
+
+def why_blog(e):
+    m = str(e)
+    if "timed out" in m or "Timeout" in m or isinstance(e, TimeoutError): return "تایم‌اوت (مدل یا سایت جواب نداد)"
+    if re.search(r"Unterminated|Expecting|JSON|Extra data", m): return "پاسخ مدل ناقص بود (JSON)"
+    h = re.search(r"HTTP Error (\d+)", m)
+    if h: return f"خطای سرور (کد {h.group(1)})"
+    if "no Gemini model" in m: return "هیچ مدلی در دسترس نبود"
+    return m.replace("\n", " ")[:80]
+
 def save_state():
     if not DRY:
         json.dump(state, open("state.json", "w"), ensure_ascii=False)
@@ -417,6 +434,7 @@ def blog_draft(text, src, link, cover_jpg=None):
         return r
     except Exception as e:
         print(f"blog draft failed: {e}")
+        logwhy(src, "blog_fail", why_blog(e), link or re.sub(r"\s+", " ", text)[:70])
         if OWNER_CHAT and not DRY:
             try: tg_api("sendMessage", {"chat_id": OWNER_CHAT, "text": f"⚠️ ساخت پیش‌نویس بلاگ ناموفق بود:\n{link}\n\n{str(e)[:500]}"})
             except Exception: pass
@@ -561,8 +579,11 @@ def publish(text, src, english=False, media=None, link=""):
     media = media or new_media()
     out = rewrite(text, src, english)
     head = out.split()[0].upper() if out.split() else ""
-    if head in ("SKIP", "DUP") and len(out) < 8:
-        print(f"[{src}] {head}: {text[:60]!r}"); stat(src, "skipped"); return True
+    if head in ("SKIP", "DUP") and len(out) < 90:
+        parts = out.split(None, 1)
+        why = parts[1].strip(" :،-.؛") if len(parts) > 1 else ("تکراری" if head == "DUP" else "نامرتبط")
+        print(f"[{src}] {head} ({why}): {text[:60]!r}"); stat(src, "skipped")
+        logwhy(src, "skipped", why, (link or "") + " | " + re.sub(r"\s+", " ", text)[:70]); return True
     try: media["cover"] = cover(out)
     except Exception as e: print(f"cover failed: {e}")
     out = strip_old_years(out)
@@ -592,16 +613,25 @@ def publish(text, src, english=False, media=None, link=""):
 
 
 # --- owner commands, read from the bot's own chat (checked once per run)
-def block(title, stats):
+def block(title, stats, log=()):
     if not stats: return f"{title}\nامروز فعالیتی ثبت نشد."
     tot = {k: sum(v.get(k, 0) for v in stats.values()) for k in ("posted", "blog_ok", "blog_fail", "skipped")}
     lines = [title, f"پست تلگرام: {tot['posted']} | بلاگ ساخته شد: {tot['blog_ok']} | بلاگ ناموفق: {tot['blog_fail']} | ردشده: {tot['skipped']}", ""]
     for src, v in sorted(stats.items()):
         lines.append(f"• {src}: پست {v.get('posted', 0)}، بلاگ {v.get('blog_ok', 0)}، بلاگ ناموفق {v.get('blog_fail', 0)}، ردشده {v.get('skipped', 0)}")
+    sk = [x for x in log if x["kind"] == "skipped"]; bf = [x for x in log if x["kind"] == "blog_fail"]
+    if sk:
+        why = {}
+        for x in sk: why[x["why"]] = why.get(x["why"], 0) + 1
+        lines += ["", "🚫 علت ردشده‌ها: " + "، ".join(f"{w} ({n})" for w, n in sorted(why.items(), key=lambda t: -t[1]))]
+        lines += [f"  – {x['src']}: {x['why']} — {x['ref'].split(' | ')[-1][:60]}" for x in sk[-8:]]
+    if bf:
+        lines += ["", "⚠️ بلاگ‌های ناموفق و علت:"]
+        lines += [f"  – {x['src']}: {x['why']}\n    {x['ref'][:90]}" for x in bf[-8:]]
     return "\n".join(lines)
 
 def report_text(day):
-    parts = [block("🚢 اسکله", state.get("stats", {}).get(day, {}))]
+    parts = [block("🚢 اسکله", state.get("stats", {}).get(day, {}), state.get("log", {}).get(day, []))]
     return f"📊 گزارش امروز ({day})\n(ردشده = نامرتبط، تکراری یا قدیمی)\n\n" + "\n\n".join(parts)
 
 def daily_report():
