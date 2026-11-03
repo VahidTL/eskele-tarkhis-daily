@@ -532,6 +532,108 @@ def publish(text, src, english=False, media=None, link=""):
     save_state()  # persist right after each post so a later crash can't cause duplicates
     return True
 
+
+# --- owner commands, read from the bot's own chat (checked once per run)
+def block(title, stats):
+    if not stats: return f"{title}\nامروز فعالیتی ثبت نشد."
+    tot = {k: sum(v.get(k, 0) for v in stats.values()) for k in ("posted", "blog_ok", "blog_fail", "skipped")}
+    lines = [title, f"پست تلگرام: {tot['posted']} | بلاگ ساخته شد: {tot['blog_ok']} | بلاگ ناموفق: {tot['blog_fail']} | ردشده: {tot['skipped']}", ""]
+    for src, v in sorted(stats.items()):
+        lines.append(f"• {src}: پست {v.get('posted', 0)}، بلاگ {v.get('blog_ok', 0)}، بلاگ ناموفق {v.get('blog_fail', 0)}، ردشده {v.get('skipped', 0)}")
+    return "\n".join(lines)
+
+def report_text(day):
+    parts = [block("🚢 اسکله", state.get("stats", {}).get(day, {}))]
+    return f"📊 گزارش امروز ({day})\n(ردشده = نامرتبط، تکراری یا قدیمی)\n\n" + "\n\n".join(parts)
+
+def daily_report():
+    now = datetime.datetime.now(TEHRAN); day = now.strftime("%Y-%m-%d")
+    if now.hour < 23 or state.get("report_date") == day or not OWNER_CHAT or DRY: return
+    tg_api("sendMessage", {"chat_id": OWNER_CHAT, "text": report_text(day)[:4000]})
+    state["report_date"] = day
+
+def owner_say(t):
+    tg_api("sendMessage", {"chat_id": OWNER_CHAT, "text": t[:4000], "disable_web_page_preview": "true"})
+
+def find_item(link):
+    """(source name, text, media) for a Telegram post link or a feed/article URL, or None."""
+    m = re.match(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)", link)
+    if m:
+        for pid, text, media in tg_items(m.group(1)):
+            if pid == int(m.group(2)): return "@" + m.group(1), text, media
+        return None
+    for name, url in RSS.items():
+        for key, text, media in rss_items(url):
+            if key == link: return name, text, media
+    for key, _, _ in wco_items():
+        if key == link:
+            text, media = wco_text(key); return "wco", text, media
+    return None
+
+HELP = """دستورهای اسکله:
+/report — گزارش امروز همین الان
+/stats — آمار ۷ روز اخیر
+/status — وضعیت بات (فعال یا متوقف)
+/sources — فهرست منابع
+/pause — توقف انتشار پست جدید
+/resume — ادامه‌ی انتشار
+/redo لینک — ساخت دوباره‌ی پیش‌نویس بلاگ برای یک خبر
+/post لینک — انتشار دستی یک خبر در کانال (همراه پیش‌نویس)
+/help — همین راهنما
+(لینک = لینک پست تلگرام یا آدرس خبر منبع. بات هر حدود ۲ دقیقه پیام‌ها را می‌خواند.)"""
+
+def handle_commands():
+    if not OWNER_CHAT or DRY: return
+    try: print("bot:", json.loads(tg_api("getMe", {}))["result"]["username"])
+    except Exception: pass
+    r = json.loads(tg_api("getUpdates", {"offset": state.get("tg_offset", 0), "timeout": 0, "allowed_updates": json.dumps(["message"])}))
+    for u in r.get("result", []):
+        state["tg_offset"] = u["update_id"] + 1
+        m = u.get("message") or {}
+        if str((m.get("chat") or {}).get("id")) != str(OWNER_CHAT): continue
+        parts = (m.get("text") or "").strip().split(None, 1)
+        if not parts or not parts[0].startswith("/"): continue
+        cmd, arg = parts[0].split("@")[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
+        save_state()
+        try:
+            day = datetime.datetime.now(TEHRAN).strftime("%Y-%m-%d")
+            if cmd in ("/start", "/help"): owner_say(HELP)
+            elif cmd == "/report": owner_say(report_text(day))
+            elif cmd == "/stats":
+                rows = []
+                for d, v in sorted(state.get("stats", {}).items()):
+                    tot = lambda k: sum(x.get(k, 0) for x in v.values())
+                    rows.append(f"{d}: پست {tot('posted')}، بلاگ {tot('blog_ok')}، ناموفق {tot('blog_fail')}، ردشده {tot('skipped')}")
+                owner_say("📈 آمار اسکله (۷ روز اخیر)\n" + "\n".join(rows or ["هنوز داده‌ای نیست."]))
+            elif cmd == "/status":
+                now = datetime.datetime.now(TEHRAN).strftime("%H:%M")
+                owner_say(("⏸ متوقف" if state.get("paused") else "▶️ فعال") + f" — ساعت تهران {now}\nتعداد منابع: {len(TG_CHANNELS) + len(RSS) + len(["wco"])}")
+            elif cmd == "/sources":
+                owner_say("منابع:\n" + "\n".join(["@" + c for c in TG_CHANNELS] + list(RSS) + ["wco"]))
+            elif cmd == "/pause": state["paused"] = True; owner_say("⏸ انتشار پست جدید متوقف شد. با /resume ادامه می‌دهم.")
+            elif cmd == "/resume": state["paused"] = False; owner_say("▶️ انتشار ادامه پیدا کرد.")
+            elif cmd in ("/redo", "/post"):
+                if not arg.startswith("http"): owner_say(f"لینک را بعد از دستور بنویس: {cmd} https://…"); continue
+                it = find_item(arg)
+                if not it or not it[1]: owner_say("این خبر پیدا نشد یا متنی نداشت (ممکن است از صفحه‌ی منبع رفته باشد)."); continue
+                src, text, media = it
+                owner_say("⏳ در حال انجام…")
+                if cmd == "/redo": blog_draft(text, src, arg)
+                else: publish(text, src, src == "wco", media, link=arg)
+                owner_say("✅ تمام شد.")
+            else: owner_say("دستور ناشناخته است. /help")
+        except Exception as e:
+            owner_say(f"⚠️ خطا در {cmd}: {str(e)[:300]}")
+    save_state()
+
+try: handle_commands()
+except Exception as e: print(f"commands failed: {e}")
+if state.get("paused"):
+    print("paused")
+    try: daily_report()
+    except Exception as e: print(f"report failed: {e}")
+    save_state(); raise SystemExit
+
 if os.environ.get("BACKFILL"):  # one-off: blog drafts for the channel's last 5 posts
     for pid, text, _ in tg_items("eskele_org")[-5:]:
         text = text.split("━━━")[0].strip()
