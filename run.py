@@ -394,6 +394,19 @@ SHOW_SOURCE = False  # the blog does not name the source for now
 
 def external_en(src): return src == "wco"
 
+def english_slug(title, fallback=""):
+    """A real English slug (translation, never Persian written in Latin letters), from a dedicated call."""
+    try:
+        t = ask(f"""Translate this Persian blog title into a short English URL slug.
+Title: {title}
+Rules: 3 to 7 English words that MEAN the same thing in English (translate the meaning; NEVER write Persian words in Latin letters such as "dore", "bazaryabi", "kharid", "gomrok", "tarkhis"). Lowercase, words joined by hyphens, no year, no punctuation.
+Reply with the slug only.""", max_tokens=400)
+        sl = re.sub(r"[^a-z0-9]+", "-", t.strip().splitlines()[-1].lower()).strip("-")[:90]
+        if len(sl) >= 6 and re.search(r"[a-z]", sl): return sl
+    except Exception as e:
+        print(f"english slug failed: {e}")
+    return fallback
+
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     year_rule = "\n\nقانون سال: منبع انگلیسی است؛ هر سالی که می‌آوری میلادی باشد (مثل ۲۰۲۶)، نه شمسی." if external_en(src) else ""
@@ -415,6 +428,7 @@ def blog_draft(text, src, link, cover_jpg=None):
             return re.sub(r"\s{2,}", " ", p).strip()
         art["paragraphs"] = [strip_old_years(tidy(p)) for p in art["paragraphs"] if isinstance(p, str)]
         art["slug"] = re.sub(r"[^a-z0-9]+", "-", str(art.get("slug", "")).lower()).strip("-")[:90]
+        art["slug"] = english_slug(art["title"], art["slug"]) or art["slug"]
         art["paragraphs"] = fix_headings([p for p in art["paragraphs"] if isinstance(p, str) and p.strip()])[:60]
         if not H3_SUPPORTED: art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"]]  # the site only knows H2 until its update with H3 support is installed
         art["title"] = strip_old_years(art["title"], True)[:180]
