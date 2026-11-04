@@ -346,7 +346,7 @@ ARTICLE_PROMPT = """تو نویسنده‌ی ارشد بلاگ «اسکله» (�
 {brief}
 
 فقط یک شیء JSON معتبر برگردان:
-{{"title": "H1 / عنوان سئو (حداکثر ۷۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "slug": "ترجمه‌ی انگلیسی عنوان به‌صورت اسلاگ: فقط حروف کوچک لاتین و خط تیره، حداکثر ۷ کلمه", "seo_description": "توضیح متا تا ۱۵۵ حرف", "paragraphs": ["پاراگراف", "## تیتر H2", "پاراگراف", "### تیتر H3 را هم با ## بنویس", "..."]}}
+{{"title": "H1 / عنوان سئو (حداکثر ۷۰ حرف)", "excerpt": "خلاصه‌ی یک‌جمله‌ای", "slug": "ترجمه‌ی انگلیسی عنوان به‌صورت اسلاگ: فقط حروف کوچک لاتین و خط تیره، حداکثر ۷ کلمه", "seo_description": "توضیح متا تا ۱۵۵ حرف", "cover_alt": "متن جایگزین (alt) تصویر شاخص: توصیف واقعی یک جمله‌ای از صحنه‌ی عکس به فارسی، حداکثر ۱۱۰ حرف، با کلمه‌ی کلیدی اصلی مقاله به‌صورت طبیعی، بدون عبارت «تصویر» یا «عکس» در ابتدا", "paragraphs": ["پاراگراف", "## تیتر H2", "پاراگراف", "### تیتر H3 را هم با ## بنویس", "..."]}}
 هر عنصر paragraphs یا یک پاراگراف است یا تیتر: «## » برای H2 و «### » برای H3. سلسله‌مراتب را درست رعایت کن: بخش‌های اصلی H2 باشند و زیرمجموعه‌ی هر بخش H3؛ تیتر «سوالات متداول» یک H2 است و هر سوال زیر آن حتماً H3 (با «### »)، نه H2؛ H3 هرگز بدون H2 قبل از خود نیاید. حداکثر ۵۵ عنصر.
 متن نهایی مقاله است، نه بریف: هیچ عبارت داخل [ ]، برچسب مثل CTA یا یادداشت نویسنده، یا علامت ` در آن نباشد. در پایان یک پاراگراف دعوت‌به‌اقدام عادی و کوتاه بنویس (مثلاً دعوت به گفتگو یا مشاوره با تیم برند)؛ فایل، چک‌لیست، دوره یا پیشنهاد رایگان نساز که وجود ندارد."""
 
@@ -432,6 +432,7 @@ def blog_draft(text, src, link, cover_jpg=None):
         art["paragraphs"] = fix_headings([p for p in art["paragraphs"] if isinstance(p, str) and p.strip()])[:60]
         if not H3_SUPPORTED: art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"]]  # the site only knows H2 until its update with H3 support is installed
         art["title"] = strip_old_years(art["title"], True)[:180]
+        art["cover_alt"] = strip_old_years(str(art.get("cover_alt") or "")).strip()[:240] or art["title"]
         art["source_url"] = (link if link.startswith("https://") else None) if SHOW_SOURCE else None
         if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
             try: cover_jpg = cover(art["title"])
