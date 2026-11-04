@@ -40,7 +40,7 @@ PROMPT = """تو دبیر خبر کانال «اسکله» (حمل بین‌ال
 {text}
 
 قواعد (به ترتیب):
-1. اگر خبر ربطی به گمرک، ترخیص، تعرفه، واردات و صادرات، تجارت خارجی، حمل‌ونقل بین‌المللی، بنادر و مناطق آزاد، ارز بازرگانی یا مقررات بازرگانی ندارد، یا فقط تبریک/تاریخ روز است: فقط بنویس «SKIP نامرتبط» (و یک دلیل خیلی کوتاه بعدش اگر لازم است).
+1. اگر خبر ربطی به گمرک، ترخیص، تعرفه، واردات و صادرات، تجارت خارجی، حمل‌ونقل بین‌المللی، بنادر و مناطق آزاد، ارز بازرگانی یا مقررات بازرگانی ندارد، یا فقط تبریک/تاریخ روز است: فقط بنویس «SKIP نامرتبط» (و بعدش دلیل خیلی کوتاه، حداکثر ۵ کلمه).
 2. اگر همین خبر قبلاً در کانال منتشر شده (حتی با منبع یا لحن دیگر) و اطلاعات تازه‌ی مهمی ندارد: فقط بنویس «DUP تکراری».
 3. اگر موضوع همان خبر قبلی است ولی اطلاعات تازه و مهمی دارد: با تیتر و ساختار و کلمات کاملاً متفاوت بنویس، روی نکته‌ی تازه تأکید کن و با «🔄 تکمیل خبر» شروع کن.
 4. در غیر این صورت: خبر را به فارسی روان و حرفه‌ای با کلمات خودت بازنویس. {translate}
@@ -579,8 +579,11 @@ def publish(text, src, english=False, media=None, link=""):
     media = media or new_media()
     out = rewrite(text, src, english)
     head = out.split()[0].upper() if out.split() else ""
-    if head in ("SKIP", "DUP") and len(out) < 90:
-        parts = out.split(None, 1)
+    m_skip = re.match(r"^[\W_]*(SKIP|DUP)\b", out.strip(), re.I)  # a verdict, even with a long reason; real posts never start with these words
+    if m_skip and len(out) < 600:
+        head = m_skip.group(1).upper()
+        parts = re.sub(r"^[\W_]*(?:SKIP|DUP)\b", "", out.strip(), flags=re.I).strip().split(None, 0)
+        parts = [head, parts[0]] if parts and parts[0] else [head]
         why = parts[1].strip(" :،-.؛") if len(parts) > 1 else ("تکراری" if head == "DUP" else "نامرتبط")
         print(f"[{src}] {head} ({why}): {text[:60]!r}"); stat(src, "skipped")
         logwhy(src, "skipped", why, (link or "") + " | " + re.sub(r"\s+", " ", text)[:70]); return True
