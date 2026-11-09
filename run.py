@@ -407,21 +407,77 @@ Reply with the slug only.""", max_tokens=400)
         print(f"english slug failed: {e}")
     return fallback
 
+NEWS_PROMPT = """تو دبیر خبر سایت «اسکله» (eskele.org) هستی: حمل بین‌المللی و ترخیص کالا. از هر خبر ورودی یک «خبر» برای سایت می‌سازی و خروجی فقط یک شیء JSON معتبر است، بدون هیچ متن دیگر.
+
+## اول تصمیم بگیر خبر را بسازی یا نه
+فقط خبرهایی که مستقیم به این موضوعات مربوط‌اند: گمرک و ترخیص، تعرفه و کد تعرفه، مقررات و ممنوعیت واردات و صادرات، ارز واردات و رفع تعهد ارزی، حمل دریایی، هوایی، زمینی و ریلی، بنادر، مرزها و ترانزیت، مناطق آزاد.
+خبرهای کلان اقتصادی، سیاسی، بورس، طلا و ارز بازار آزاد، یا هر خبری که برای صاحب کالا اثر عملی ندارد را نساز و فقط این را برگردان:
+{{"skip": true, "reason": "دلیل کوتاه"}}
+
+## قواعد نوشتن
+- واقعیت‌ها فقط از متن منبع. عدد، تاریخ، نام، درصد یا مهلتی که در منبع نیست نساز. چیزی که مطمئن نیستی را ننویس.
+- بازنویسی روان و رسمی فارسی، بدون کپی جمله‌به‌جمله، بدون ایموجی، بدون «بهترین» و «فوری» و بدون اغراق.
+- نام اسکله را در متن خبر تبلیغ نکن.
+- اگر منبع خبر کانال تلگرام است، تا جای ممکن منبع رسمی اصلی را پیدا و ذکر کن (گمرک ایران، وزارت صمت، بانک مرکزی، سازمان توسعه تجارت، خبرگزاری). اگر نشد، همان لینک پیام را بگذار.
+
+## خروجی (JSON)
+{{
+  "kind": "news",
+  "title": "تیتر خبری دقیق، حداکثر ۶۰ نویسه، کلمه کلیدی اصلی در ابتدا",
+  "slug": "english-words-with-dashes (حداکثر ۶۰ نویسه، لاتین کوچک، بدون تاریخ تکراری)",
+  "excerpt": "خلاصه یک‌جمله‌ای خبر، حداکثر ۲۰۰ نویسه",
+  "seo_description": "توضیح متا بین ۱۲۰ تا ۱۵۵ نویسه: چه شد و برای چه کسی مهم است",
+  "cover_alt": "توصیف یک‌جمله‌ای از صحنه‌ی تصویر شاخص به فارسی، حداکثر ۱۱۰ حرف",
+  "paragraphs": [
+    "پاراگراف اول: خبر اصلی در ۲ تا ۳ جمله (چه، چه کسی، از کی).",
+    "## جزئیات",
+    "پاراگراف‌های جزئیات، هر بند یک آیتم آرایه",
+    "### زیرعنوان در صورت نیاز",
+    "..."
+  ],
+  "impact": "۲ تا ۴ جمله: این خبر برای واردکننده یا صادرکننده یعنی چه؟ کدام کالا یا کد تعرفه، کدام گمرک یا مسیر، چه مدرک، هزینه یا مهلتی؟ چه کاری باید بکند؟ فقط بر اساس منبع.",
+  "source_name": "نام منبع رسمی، مثلا گمرک جمهوری اسلامی ایران",
+  "source_url": "https://نشانی کامل منبع"
+}}
+
+## محدودیت‌ها
+- title بین ۵ و ۲۵۵ نویسه (هدف: زیر ۶۰).
+- paragraphs بین ۱ و ۶۰ آیتم، هر آیتم حداکثر ۳۰۰۰ نویسه. «## » تیتر H2 و «### » تیتر H3 می‌سازد. HTML ننویس.
+- impact حداکثر ۲۰۰۰ نویسه، source_name حداکثر ۱۹۰ نویسه، source_url باید نشانی کامل با https:// باشد.
+- بدون impact یا source_url خبر در سایت منتشر نمی‌شود، پس هیچ‌وقت خالی‌شان نگذار.
+- اگر خبر ادامه یا به‌روزرسانی خبری است که قبلا دادی، در تیتر صریح بگو (مثلا «تمدید مهلت …»). تیتر و موضوع تکراری نساز.
+
+خبرهای اخیراً منتشرشده:
+{recent}
+
+خبر ورودی (منبع: {src}، لینک: {link}):
+{text}"""
+
+SOURCE_NAMES = {"akhbargomroki": "اخبار گمرکی", "mefa-news": "وزارت امور اقتصادی و دارایی", "mefa-notices": "وزارت امور اقتصادی و دارایی",
+                "mefa-circulars": "وزارت امور اقتصادی و دارایی", "wco": "World Customs Organization"}
+def source_line(src, link, name=None):
+    """'🔗 منبع: <name>' as a followed link to the original item."""
+    if not (link and link.startswith("https://")): return "", 0
+    name = name or SOURCE_NAMES.get(src, src)
+    return f'\n\n🔗 منبع: <a href="{html.escape(link)}">{html.escape(name)}</a>', len(f"\n\n🔗 منبع: {name}")
+
 def blog_draft(text, src, link, cover_jpg=None):
     if not (BLOG_URL and BLOG_TOKEN): return
     year_rule = "\n\nقانون سال: منبع انگلیسی است؛ هر سالی که می‌آوری میلادی باشد (مثل ۲۰۲۶)، نه شمسی." if external_en(src) else ""
     try:
-        brief_req = BRIEF_SKILL + "\n\n---\nبرای خبر زیر یک بریف مقاله‌ی بلاگ (Article / Blog Brief) به زبان فارسی بساز. کلمه‌ی کلیدی اصلی را خودت از خبر استخراج کن.\n\n" + text[:3000] + date_rule() + year_rule
-        try: brief = ask(brief_req, search=True, max_tokens=8000)
-        except Exception as e:
-            print(f"brief with search failed ({e}), retrying without search"); brief = ask(brief_req, max_tokens=8000)
-        for attempt in (1, 2):  # thinking tokens share the output cap, so a cut-off JSON is possible: retry once
-            raw = ask(ARTICLE_PROMPT.format(src=src, text=text[:3000], brief=brief[:8000]) + date_rule() + year_rule, as_json=True, max_tokens=20000)
+        recent = "\n".join(f"- {r}" for r in state["recent"][-30:]) or "(هنوز موردی نیست)"
+        for attempt in (1, 2):
+            raw = ask(NEWS_PROMPT.format(recent=recent, src=src, link=link, text=text[:3500]) + date_rule() + year_rule, as_json=True, max_tokens=12000)
             raw = re.sub(r"^```(?:json)?|```$", "", raw.strip()).strip()
             try: art = json.loads(raw); break
             except ValueError:
                 if attempt == 2: raise
-                print("article JSON cut off, retrying")
+                print("news JSON cut off, retrying")
+        if art.get("skip"):
+            print(f"news editor skipped the blog: {art.get('reason')}")
+            logwhy(src, "blog_fail", "دبیر خبر: " + str(art.get("reason", "نامرتبط"))[:60], link or re.sub(r"\s+", " ", text)[:70])
+            return None
+        art["kind"] = "news"
         def tidy(p):  # drop leftover brief notes: "[CTA: x]" keeps x, any other [..] note is removed; no backticks
             p = re.sub(r"\[\s*(?:CTA|Call to action)\s*[:：]\s*([^\]]*)\]", r"\1", p, flags=re.I)
             p = re.sub(r"\[[^\]]*\]", "", p).replace("`", "")
@@ -433,7 +489,13 @@ def blog_draft(text, src, link, cover_jpg=None):
         if not H3_SUPPORTED: art["paragraphs"] = [p.replace("### ", "## ", 1) for p in art["paragraphs"]]  # the site only knows H2 until its update with H3 support is installed
         art["title"] = strip_old_years(art["title"], True)[:180]
         art["cover_alt"] = strip_old_years(str(art.get("cover_alt") or "")).strip()[:240] or art["title"]
-        art["source_url"] = (link if link.startswith("https://") else None) if SHOW_SOURCE else None
+        su = str(art.get("source_url") or "")
+        if not su.startswith("https://"): su = link if link.startswith("https://") else ""
+        art["source_url"] = su or None
+        art["source_name"] = (str(art.get("source_name") or "").strip() or SOURCE_NAMES.get(src, src))[:190]
+        art["impact"] = strip_old_years(str(art.get("impact") or "")).strip()[:2000]
+        art["excerpt"] = str(art.get("excerpt") or "")[:200]
+        if not su: art.pop("source_url")
         if not cover_jpg:  # no channel cover (e.g. a redo): build one from the Persian title
             try: cover_jpg = cover(art["title"])
             except Exception as e: print(f"cover for draft failed: {e}")
@@ -606,10 +668,11 @@ def publish(text, src, english=False, media=None, link=""):
     except Exception as e: print(f"cover failed: {e}")
     out = strip_old_years(out)
     body = to_html(out)
-    room = (1000 if media.get("cover") else 4000) - len(re.sub("<[^>]+>", "", html.unescape(FOOTER))) - len(READ_MORE_PLAIN)
+    room = (1000 if media.get("cover") else 4000) - len(re.sub("<[^>]+>", "", html.unescape(FOOTER))) - len(READ_MORE_PLAIN) - source_line(src, link)[1]
     while len(re.sub("<[^>]+>", "", html.unescape(body))) > room and "\n" in body: body = body.rsplit("\n", 1)[0].rstrip()  # drop trailing lines until it fits
     if len(re.sub("<[^>]+>", "", html.unescape(body))) > room: body = body[:room - 1].rstrip() + "…"
-    msg = body + FOOTER
+    src_html, src_len = source_line(src, link)
+    msg = body + src_html + FOOTER
     if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
     ref = send(msg, media)
     if not DRY: time.sleep(8); stat(src, "posted")
@@ -620,8 +683,8 @@ def publish(text, src, english=False, media=None, link=""):
             try:
                 more = f'\n\n📖 <a href="{html.escape(r["url"])}">مطالعه کامل در بلاگ سایت</a>'
                 edit = {"chat_id": DST, "message_id": ref[1], "parse_mode": "HTML"}
-                if ref[0] == "photo": tg_api("editMessageCaption", {**edit, "caption": body + more + FOOTER})
-                else: tg_api("editMessageText", {**edit, "text": body + more + FOOTER, "disable_web_page_preview": "true"})
+                if ref[0] == "photo": tg_api("editMessageCaption", {**edit, "caption": body + src_html + more + FOOTER})
+                else: tg_api("editMessageText", {**edit, "text": body + src_html + more + FOOTER, "disable_web_page_preview": "true"})
             except Exception as e: print(f"read-more link failed: {e}")
     state["recent"].append(out.replace("\n", " ")[:160])
     state["recent"] = state["recent"][-40:]
