@@ -668,10 +668,10 @@ def publish(text, src, english=False, media=None, link=""):
     except Exception as e: print(f"cover failed: {e}")
     out = strip_old_years(out)
     body = to_html(out)
-    room = (1000 if media.get("cover") else 4000) - len(re.sub("<[^>]+>", "", html.unescape(FOOTER))) - len(READ_MORE_PLAIN) - source_line(src, link)[1]
+    room = (1000 if media.get("cover") else 4000) - len(re.sub("<[^>]+>", "", html.unescape(FOOTER))) - len(READ_MORE_PLAIN)
     while len(re.sub("<[^>]+>", "", html.unescape(body))) > room and "\n" in body: body = body.rsplit("\n", 1)[0].rstrip()  # drop trailing lines until it fits
     if len(re.sub("<[^>]+>", "", html.unescape(body))) > room: body = body[:room - 1].rstrip() + "…"
-    src_html, src_len = source_line(src, link)
+    src_html, src_len = "", 0  # channel posts carry no source line; the source is shown on the site's news only
     msg = body + src_html + FOOTER
     if DRY: print(f"[{src}] WOULD POST:\n{msg}\n")
     ref = send(msg, media)
